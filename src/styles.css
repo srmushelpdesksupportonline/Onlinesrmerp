@@ -1,0 +1,87 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #f6f7f9;
+  color: #1a1f2c;
+}
+
+.app { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 220px;
+  background: #14532d;
+  color: #e8f5ee;
+  padding: 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.brand { font-weight: 700; font-size: 16px; padding: 8px 8px 16px; }
+.nav-link {
+  display: block;
+  padding: 10px 12px;
+  color: #d6efdf;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.nav-link:hover { background: rgba(255,255,255,0.08); }
+.nav-link.active { background: rgba(255,255,255,0.15); color: #fff; }
+
+.content { flex: 1; padding: 32px; overflow: auto; }
+
+h1 { margin: 0 0 8px; font-size: 24px; }
+.muted { color: #6b7280; font-size: 14px; }
+
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.toolbar { display: flex; gap: 8px; align-items: center; margin: 16px 0; }
+
+button, .btn {
+  background: #14532d; color: #fff; border: 0;
+  padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 14px;
+}
+button.secondary { background: #fff; color: #14532d; border: 1px solid #14532d; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+input, select, textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+label { font-size: 13px; color: #374151; display: block; margin-bottom: 4px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.form-row.single { grid-template-columns: 1fr; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eef0f3; }
+th { background: #fafbfc; font-weight: 600; color: #4b5563; }
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 12px; background: #e5e7eb; color: #374151;
+}
+.badge.open { background: #dbeafe; color: #1e40af; }
+.badge.in_progress { background: #fef3c7; color: #92400e; }
+.badge.resolved, .badge.enrolled { background: #d1fae5; color: #065f46; }
+.badge.closed, .badge.rejected { background: #fee2e2; color: #991b1b; }
+
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal {
+  background: #fff; border-radius: 8px; padding: 24px;
+  width: 100%; max-width: 480px;
+}
+.modal h2 { margin-top: 0; }
