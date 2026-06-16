@@ -1,8 +1,13 @@
-import { useState } from "react";
+import { useState,useRef } from "react";
 import { AgGridReact } from "ag-grid-react";
 import { themeQuartz } from "ag-grid-community";
 import { ModuleRegistry, AllCommunityModule } from "ag-grid-community";
 import * as XLSX from "xlsx";
+import {
+  getExistingAdmissions,
+  getExistingStudents,
+  insertAdmissions
+} from "../services/admissionsService";
 
 ModuleRegistry.registerModules([
   AllCommunityModule,
@@ -25,6 +30,11 @@ export default function Admissions() {
     useState(null);
 
   const [columnDefs] = useState([
+    {
+  checkboxSelection: true,
+  headerCheckboxSelection: true,
+  width: 60,
+    },
     {
       headerName: "Application No",
       field: "application_no",
@@ -134,6 +144,78 @@ const generateEnrollmentNumbers = (
 
   });
 };
+const generateUsername = (fullName) => {
+
+  const parts = fullName
+    .trim()
+    .toLowerCase()
+    .split(/\s+/);
+
+  const nonInitials =
+    parts.filter(
+      part => part.length > 1
+    );
+
+  if (nonInitials.length === 0) {
+    return "";
+  }
+
+  const firstName =
+    nonInitials[0];
+
+  // First name has 4 or more characters
+  if (firstName.length >= 4) {
+    return firstName;
+  }
+
+  // First name less than 4 characters
+  if (nonInitials.length > 1) {
+    return (
+      firstName +
+      nonInitials[
+        nonInitials.length - 1
+      ]
+    );
+  }
+
+  return firstName;
+};
+const generateOfficialEmail = (
+  fullName,
+  program,
+  intake,
+  academicYear
+) => {
+
+  const username =
+    generateUsername(fullName);
+
+  const yearCode =
+    academicYear.substring(2, 4);
+
+  return (
+    username +
+    "." +
+    program.toLowerCase() +
+    intake.toLowerCase() +
+    yearCode +
+    "@srmus.edu.in"
+  );
+};
+const generatePassword = (
+  fullName
+) => {
+
+  const username =
+    generateUsername(fullName);
+
+  return (
+    username.charAt(0)
+      .toUpperCase() +
+    username.slice(1) +
+    "@123"
+  );
+};
   const handleUpload = () => {
 
     console.log("UPLOAD CLICKED");
@@ -161,58 +243,74 @@ const generateEnrollmentNumbers = (
 
     const reader = new FileReader();
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
 
-      let rawData = [];
+  let data;
 
-      if (extension === "csv") {
+  if (extension === "csv") {
 
-        const workbook =
-          XLSX.read(
-            e.target.result,
-            { type: "string" }
-          );
+    const csvText = e.target.result;
 
-        const sheet =
-          workbook.Sheets[
-            workbook.SheetNames[0]
-          ];
+    const workbook = XLSX.read(
+      csvText,
+      { type: "string" }
+    );
 
-        rawData =
-          XLSX.utils.sheet_to_json(
-            sheet
-          );
+    const sheet =
+      workbook.Sheets[
+        workbook.SheetNames[0]
+      ];
 
-      } else {
+    data =
+      XLSX.utils.sheet_to_json(
+        sheet
+      );
 
-        const workbook =
-          XLSX.read(
-            e.target.result,
-            { type: "array" }
-          );
+  } else {
 
-        const sheet =
-          workbook.Sheets[
-            workbook.SheetNames[0]
-          ];
+    const workbook = XLSX.read(
+      e.target.result,
+      { type: "array" }
+    );
 
-        rawData =
-          XLSX.utils.sheet_to_json(
-            sheet
-          );
-      }
+    const sheet =
+      workbook.Sheets[
+        workbook.SheetNames[0]
+      ];
 
-      console.log(rawData);
+    data =
+      XLSX.utils.sheet_to_json(
+        sheet
+      );
+
+  }
+
+  // WE WILL ADD CODE HERE
+  const admissions =
+  await getExistingAdmissions();
+
+const students =
+  await getExistingStudents();
+
+console.log(
+  "Admissions:",
+  admissions
+);
+
+console.log(
+  "Students:",
+  students
+);
 
       const enrollmentNumbers =
   generateEnrollmentNumbers(
-    rawData,
+    data,
     intake,
     academicYear
   );
 
 const mappedData =
-  rawData.map(
+  data.map(
     (row, index) => ({
 
           application_no:
@@ -259,6 +357,7 @@ const mappedData =
         `${mappedData.length} records imported successfully`
       );
     };
+  
 
     if (extension === "csv") {
       reader.readAsText(selectedFile);
@@ -342,6 +441,7 @@ const mappedData =
           columnDefs={columnDefs}
           pagination
           paginationPageSize={50}
+          rowSelection="multiple"
         />
       </div>
 
