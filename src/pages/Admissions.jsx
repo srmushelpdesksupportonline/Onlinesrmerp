@@ -1,556 +1,571 @@
-import { useState,useRef } from "react";
-import { AgGridReact } from "ag-grid-react";
-import { themeQuartz } from "ag-grid-community";
-import { ModuleRegistry, AllCommunityModule } from "ag-grid-community";
-import * as XLSX from "xlsx";
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { AgGridReact } from 'ag-grid-react';
+import { themeQuartz } from 'ag-grid-community';
+import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
+import * as XLSX from 'xlsx';
 import {
+  loadAdmissions,
+  loadAcademicYears,
   getExistingAdmissions,
   getExistingStudents,
-  insertAdmissions
-} from "../services/admissionsService";
+  getEnrolledCount,
+  insertAdmissions,
+  mapRowToMerritoImport,
+  generateAndSaveEnrollmentNo,
+  markCRMPushComplete,
+  enrollStudent,
+  cleanMobile,
+} from '../services/admissionsService';
 
-ModuleRegistry.registerModules([
-  AllCommunityModule,
-]);
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+// Standardise any rejected row into the failed-report shape
+const toFailedRow = (incomingRow, reason) => ({
+  'Application No': String(incomingRow['Application No'] || '').trim(),
+  'Student Name':
+    incomingRow['Full Name As Per Your 10th Marksheet'] ||
+    incomingRow['Full Name as per your 10th Marksheet'] ||
+    incomingRow['Full Name'] || '',
+  'Email':  incomingRow['Email ID'] || incomingRow['Email Id'] || '',
+  'Phone':  incomingRow['Mobile Number'] || '',
+  'Reason': reason,
+});
 
 export default function Admissions() {
+  const gridRef = useRef(null);
 
-  const [rowData, setRowData] = useState([]);
+  // ── Data ──────────────────────────────────────────────────────────────────
+  const [rowData, setRowData]             = useState([]);
+  const [academicYears, setAcademicYears] = useState([]);
+  const [enrolledCount, setEnrolledCount] = useState(0);
+  const [isLoading, setIsLoading]         = useState(false);
 
-  const [showUploadModal, setShowUploadModal] =
-    useState(false);
+  // ── Filters ───────────────────────────────────────────────────────────────
+  const [programFilter, setProgramFilter] = useState('');
+  const [searchText, setSearchText]       = useState('');
 
-  const [academicYear, setAcademicYear] =
-    useState("");
+  // ── Upload modal ──────────────────────────────────────────────────────────
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [academicYear, setAcademicYear]       = useState('');
+  const [intake, setIntake]                   = useState('');
+  const [selectedFile, setSelectedFile]       = useState(null);
+  const [isUploading, setIsUploading]         = useState(false);
 
-  const [intake, setIntake] =
-    useState("");
+  // ── Summary modal ─────────────────────────────────────────────────────────
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [uploadSummary, setUploadSummary]       = useState(null);
 
-  const [selectedFile, setSelectedFile] =
-    useState(null);
+  // ── Action states ─────────────────────────────────────────────────────────
+  const [isMarkingCRM, setIsMarkingCRM]     = useState(false);
+  const [isEnrolling, setIsEnrolling]       = useState(false);
+  const [enrollProgress, setEnrollProgress] = useState(null);
 
-  const [columnDefs] = useState([
+  // ── Column definitions ────────────────────────────────────────────────────
+  const columnDefs = [
+    { checkboxSelection: true, headerCheckboxSelection: true, width: 50, pinned: 'left' },
+    { headerName: 'Application No', field: 'application_no',                       width: 160 },
+    { headerName: 'Student Name',   field: 'full_name_as_per_your_10th_marksheet', flex: 2, minWidth: 200 },
+    { headerName: 'Program',        field: 'course',                                width: 90  },
+    { headerName: 'Intake',         field: 'intake',                                width: 80  },
+    { headerName: 'Personal Email', field: 'email_id',                              flex: 2, minWidth: 200 },
+    { headerName: 'Mobile',         field: 'mobile_number',                         width: 150 },
+    { headerName: 'Enrollment No',  field: 'enrollment_no',  width: 160 },
     {
-  checkboxSelection: true,
-  headerCheckboxSelection: true,
-  width: 60,
+      headerName: 'CRM Push',
+      field: 'api_push_status',
+      width: 130,
+      cellStyle: (p) => {
+        if (p.value === 'COMPLETED') return { color: '#15803d', fontWeight: 600 };
+        if (p.value === 'PENDING')   return { color: '#b45309', fontWeight: 600 };
+        return { color: '#6b7280' };
+      },
     },
     {
-      headerName: "Application No",
-      field: "application_no",
-      flex: 1,
+      headerName: '',
+      field: 'id',
+      width: 60,
+      cellRenderer: (p) => (
+        <button
+          onClick={() => {}}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '18px',
+            color: '#666',
+            padding: '4px 8px',
+          }}
+          title="View full application"
+        >
+          ⋯
+        </button>
+      ),
     },
-    {
-      headerName: "Student Name",
-      field: "full_name",
-      flex: 2,
-    },
-    {
-      headerName: "Program",
-      field: "course",
-      flex: 1,
-    },
-    {
-      headerName: "Intake",
-      field: "intake",
-      flex: 1,
-    },
-    {
-      headerName: "Email",
-      field: "personal_email",
-      flex: 2,
-    },
-    {
-      headerName: "Mobile",
-      field: "mobile_number",
-      flex: 1,
-    },
-    {
-      headerName: "CRM Push Status",
-      field: "crm_push_status",
-      flex: 1,
-    },
-    {
-      headerName: "Enrollment No",
-      field: "enrollment_no",
-      flex: 1,
-    },
-    {
-      headerName: "Official Email",
-      field: "official_email",
-      flex: 2,
-    },
-    {
-      headerName: "Email Status",
-      field: "email_activation_status",
-      flex: 1,
-    },
-    {
-      headerName: "Enrollment Status",
-      field: "enrollment_status",
-      flex: 1,
-    },
-    
-  ]
+  ];
 
-);
-const generateEnrollmentNumbers = (
-  rawData,
-  intake,
-  academicYear
-) => {
+  // ── Load data ─────────────────────────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [admissions, count] = await Promise.all([
+        loadAdmissions(programFilter),
+        getEnrolledCount(),
+      ]);
+      setRowData(admissions);
+      setEnrolledCount(count);
+    } catch (err) {
+      console.error('loadData:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [programFilter]);
 
-  const programCodes = {
-    MBA: "MB",
-    MCA: "MC",
-    BBA: "BB",
-    BCA: "BC",
+  useEffect(() => { loadAcademicYears().then(setAcademicYears); }, []);
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // ── Dashboard card values ─────────────────────────────────────────────────
+  const totalRecords = rowData.length;
+  // Pending Review: no enrollment number yet (auto-generation may have failed)
+  const pendingReview = rowData.filter((r) => !r.enrollment_no).length;
+  // Ready For Enrollment: enrollment number generated AND CRM push confirmed
+  const readyForEnrollment = rowData.filter(
+    (r) => r.enrollment_no && r.api_push_status === 'COMPLETED'
+  ).length;
+  // enrolledCount comes from student_master
+
+  // ── Failed report download ────────────────────────────────────────────────
+  const downloadFailedReport = (failedRows) => {
+    if (!failedRows?.length) { alert('No failed records.'); return; }
+    const ws = XLSX.utils.json_to_sheet(failedRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Failed Report');
+    XLSX.writeFile(wb, 'failed_report.xlsx');
   };
 
-  const sessionCode =
-    intake === "JAN" ? "1" : "2";
-
-  const yearCode =
-    academicYear.substring(2, 4);
-
-  const counters = {};
-
-  return rawData.map((row) => {
-
-    const program =
-      row["Program Applied For"] ||
-      row["Course"] ||
-      "";
-
-    if (!counters[program]) {
-      counters[program] = 1;
-    }
-
-    const serial =
-      String(
-        counters[program]
-      ).padStart(4, "0");
-
-    counters[program]++;
-
-    return (
-      "E" +
-      (programCodes[program] || "XX") +
-      sessionCode +
-      yearCode +
-      "0" +
-      serial
-    );
-
-  });
-};
-const generateUsername = (fullName) => {
-
-  const parts = fullName
-    .trim()
-    .toLowerCase()
-    .split(/\s+/);
-
-  const nonInitials =
-    parts.filter(
-      part => part.length > 1
-    );
-
-  if (nonInitials.length === 0) {
-    return "";
-  }
-
-  const firstName =
-    nonInitials[0];
-
-  // First name has 4 or more characters
-  if (firstName.length >= 4) {
-    return firstName;
-  }
-
-  // First name less than 4 characters
-  if (nonInitials.length > 1) {
-    return (
-      firstName +
-      nonInitials[
-        nonInitials.length - 1
-      ]
-    );
-  }
-
-  return firstName;
-};
-const generateOfficialEmail = (
-  fullName,
-  program,
-  intake,
-  academicYear
-) => {
-
-  const username =
-    generateUsername(fullName);
-
-  const yearCode =
-    academicYear.substring(2, 4);
-
-  return (
-    username +
-    "." +
-    program.toLowerCase() +
-    intake.toLowerCase() +
-    yearCode +
-    "@srmus.edu.in"
-  );
-};
-const generatePassword = (
-  fullName
-) => {
-
-  const username =
-    generateUsername(fullName);
-
-  return (
-    username.charAt(0)
-      .toUpperCase() +
-    username.slice(1) +
-    "@123"
-  );
-};
+  // ── Upload handler ────────────────────────────────────────────────────────
   const handleUpload = () => {
+    if (!academicYear) { alert('Please select Academic Year'); return; }
+    if (!intake)       { alert('Please select Intake');        return; }
+    if (!selectedFile) { alert('Please select a file');        return; }
 
-    console.log("UPLOAD CLICKED");
-
-    if (!academicYear) {
-      alert("Please select Academic Year");
-      return;
-    }
-
-    if (!intake) {
-      alert("Please select Intake");
-      return;
-    }
-
-    if (!selectedFile) {
-      alert("Please select a file");
-      return;
-    }
-
-    const extension =
-      selectedFile.name
-        .split(".")
-        .pop()
-        .toLowerCase();
-
+    const ext    = selectedFile.name.split('.').pop().toLowerCase();
     const reader = new FileReader();
 
     reader.onload = async (e) => {
+      setIsUploading(true);
+      try {
+        // Parse file
+        let parsedData;
+        if (ext === 'csv') {
+          const wb = XLSX.read(e.target.result, { type: 'string' });
+          parsedData = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        } else {
+          const wb = XLSX.read(e.target.result, { type: 'array' });
+          parsedData = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        }
 
-  let data;
+        // Fetch existing records for duplicate check
+        const [existingAdmissions, existingStudents] = await Promise.all([
+          getExistingAdmissions(),
+          getExistingStudents(),
+        ]);
 
-  if (extension === "csv") {
+        const admissionAppNos  = new Set(existingAdmissions.map((a) => String(a.application_no || '').trim()));
+        const admissionEmails  = new Set(existingAdmissions.map((a) => (a.email_id || '').toLowerCase()));
+        const admissionMobiles = new Set(existingAdmissions.map((a) => cleanMobile(String(a.mobile_number || ''))));
 
-    const csvText = e.target.result;
+        const studentAppNos    = new Set(existingStudents.map((s) => String(s.application_no || '').trim()));
+        const studentEmails    = new Set(existingStudents.map((s) => (s.personal_email || '').toLowerCase()));
+        const studentMobiles   = new Set(existingStudents.map((s) => cleanMobile(String(s.mobile || ''))));
 
-    const workbook = XLSX.read(
-      csvText,
-      { type: "string" }
-    );
+        const validRows  = [];
+        const failedRows = [];
 
-    const sheet =
-      workbook.Sheets[
-        workbook.SheetNames[0]
-      ];
+        for (const incomingRow of parsedData) {
+          const appNo  = String(incomingRow['Application No'] || '').trim();
+          const email  = (incomingRow['Email ID'] || incomingRow['Email Id'] || '').toLowerCase();
+          const mobile = cleanMobile(String(incomingRow['Mobile Number'] || ''));
 
-    data =
-      XLSX.utils.sheet_to_json(
-        sheet
-      );
+          // 1. Missing Application No
+          if (!appNo) {
+            failedRows.push(toFailedRow(incomingRow, 'Missing Application No'));
+            continue;
+          }
 
-  } else {
+          // 2. Duplicate in admissions queue
+          if (
+            admissionAppNos.has(appNo) ||
+            admissionEmails.has(email) ||
+            (mobile && admissionMobiles.has(mobile))
+          ) {
+            const reason = admissionAppNos.has(appNo)
+              ? 'Application No already in admissions queue'
+              : admissionEmails.has(email)
+              ? 'Email already in admissions queue'
+              : 'Mobile already in admissions queue';
+            failedRows.push(toFailedRow(incomingRow, reason));
+            continue;
+          }
 
-    const workbook = XLSX.read(
-      e.target.result,
-      { type: "array" }
-    );
+          // 3. Already enrolled
+          if (
+            studentAppNos.has(appNo) ||
+            studentEmails.has(email) ||
+            (mobile && studentMobiles.has(mobile))
+          ) {
+            const reason = studentAppNos.has(appNo)
+              ? 'Application No already enrolled'
+              : studentEmails.has(email)
+              ? 'Email already enrolled'
+              : 'Mobile already enrolled';
+            failedRows.push(toFailedRow(incomingRow, reason));
+            continue;
+          }
 
-    const sheet =
-      workbook.Sheets[
-        workbook.SheetNames[0]
-      ];
+          validRows.push(incomingRow);
+        }
 
-    data =
-      XLSX.utils.sheet_to_json(
-        sheet
-      );
+        // Save valid rows + auto-generate enrollment numbers
+        let enrollGenerated = 0;
+        const enrollErrors  = [];
 
-  }
+        if (validRows.length > 0) {
+          const mapped       = validRows.map((vr) => mapRowToMerritoImport(vr, intake, academicYear));
+          const insertedRows = await insertAdmissions(mapped);
 
-  // WE WILL ADD CODE HERE
-  const admissions =
-  await getExistingAdmissions();
+          for (const insertedRow of insertedRows) {
+            try {
+              await generateAndSaveEnrollmentNo(insertedRow);
+              enrollGenerated++;
+            } catch (err) {
+              enrollErrors.push(`${insertedRow.application_no}: ${err.message}`);
+            }
+          }
 
-const students =
-  await getExistingStudents();
+          await loadData();
+        }
 
-console.log(
-  "Admissions:",
-  admissions
-);
+        setUploadSummary({
+          total:           parsedData.length,
+          valid:           validRows.length,
+          failed:          failedRows.length,
+          enrollGenerated,
+          enrollErrors,
+          failedRows,
+        });
+        setShowUploadModal(false);
+        setShowSummaryModal(true);
 
-console.log(
-  "Students:",
-  students
-);
-
-      const enrollmentNumbers =
-  generateEnrollmentNumbers(
-    data,
-    intake,
-    academicYear
-  );
-
-const mappedData =
-  data.map(
-    (row, index) => ({
-
-          application_no:
-            row["Application No"] || "",
-
-          full_name:
-            row["Full Name As Per Your 10th Marksheet"] ||
-            row["Full Name"] ||
-            "",
-
-          course:
-            row["Program Applied For"] ||
-            row["Course"] ||
-            "",
-
-          intake: intake,
-
-          personal_email:
-            row["Email ID"] || "",
-
-          mobile_number:
-            row["Mobile Number"] || "",
-
-          crm_push_status:
-            "Pending",
-
-          enrollment_no: enrollmentNumbers[index],
-
-          official_email:
-            "",
-
-          email_activation_status:
-            "",
-
-          enrollment_status:
-            "Generated",
-        }));
-
-      setRowData(mappedData);
-
-      setShowUploadModal(false);
-
-      alert(
-        `${mappedData.length} records imported successfully`
-      );
+      } catch (err) {
+        console.error('Upload error:', err);
+        alert('Upload failed: ' + (err.message || 'Unknown error'));
+      } finally {
+        setIsUploading(false);
+      }
     };
-  
 
-    if (extension === "csv") {
-      reader.readAsText(selectedFile);
-    } else {
-      reader.readAsArrayBuffer(selectedFile);
+    if (ext === 'csv') reader.readAsText(selectedFile);
+    else               reader.readAsArrayBuffer(selectedFile);
+  };
+
+  // ── Mark CRM Push Complete ────────────────────────────────────────────────
+  // Temporary manual step until Merritto API is integrated.
+  // Eligibility: must have an enrollment number + currently PENDING.
+  const handleMarkCRMComplete = async () => {
+    const selected = gridRef.current?.api?.getSelectedRows() || [];
+
+    if (selected.length === 0) {
+      alert('Select at least one row first.');
+      return;
+    }
+
+    const eligible = selected.filter(
+      (r) => r.enrollment_no && r.api_push_status === 'PENDING'
+    );
+
+    if (eligible.length === 0) {
+      alert(
+        'No eligible rows selected.\n\n' +
+        'Rows must have an enrollment number and CRM Push status of PENDING.'
+      );
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Mark ${eligible.length} row(s) as CRM Push Completed?\n\n` +
+        `This confirms the enrollment number has been sent to Merritto.`
+      )
+    ) return;
+
+    setIsMarkingCRM(true);
+    try {
+      const ids = eligible.map((r) => r.id);
+      await markCRMPushComplete(ids);
+      await loadData();
+      alert(`${eligible.length} row(s) marked as CRM Push Completed ✓`);
+    } catch (err) {
+      alert('Failed: ' + err.message);
+    } finally {
+      setIsMarkingCRM(false);
     }
   };
 
+  // ── Enroll ────────────────────────────────────────────────────────────────
+  // Eligibility: enrollment number generated AND CRM push completed.
+  const handleEnroll = async () => {
+    const selected = gridRef.current?.api?.getSelectedRows() || [];
+
+    if (selected.length === 0) {
+      alert('Select at least one row first.');
+      return;
+    }
+
+    const eligible = selected.filter(
+      (r) => r.enrollment_no && r.api_push_status === 'COMPLETED'
+    );
+
+    if (eligible.length === 0) {
+      alert(
+        'No eligible rows selected.\n\n' +
+        'Rows must have:\n' +
+        '• Enrollment number generated\n' +
+        '• CRM Push status = Completed'
+      );
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Enroll ${eligible.length} student(s)?\n\n` +
+        `This will:\n` +
+        `• Generate an official email and password\n` +
+        `• Move them to the Student page\n` +
+        `• Remove them from this list\n\n` +
+        `This cannot be undone.`
+      )
+    ) return;
+
+    setIsEnrolling(true);
+    setEnrollProgress({ done: 0, total: eligible.length, errors: [] });
+
+    let success = 0;
+    const errors = [];
+
+    for (const eligibleRow of eligible) {
+      try {
+        await enrollStudent(eligibleRow, {});
+        success++;
+      } catch (err) {
+        errors.push(
+          `${eligibleRow.application_no} – ` +
+          `${eligibleRow.full_name_as_per_your_10th_marksheet}: ${err.message}`
+        );
+      }
+      setEnrollProgress((p) => ({ ...p, done: (p?.done ?? 0) + 1, errors }));
+    }
+
+    setIsEnrolling(false);
+    setEnrollProgress(null);
+    await loadData();
+
+    if (errors.length > 0) {
+      alert(`Enrolled: ${success} / ${eligible.length}\n\nFailed:\n` + errors.join('\n'));
+    } else {
+      alert(
+        `Enrolled: ${success} / ${eligible.length} ✓\n\n` +
+        `Students moved to Student page.\n` +
+        `Official emails are pending Google Workspace activation.`
+      );
+    }
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div>
+    <div className="page-container">
+      <h1 className="page-title">Admissions / Raw Data</h1>
 
-      <h1>Admissions / Raw Data</h1>
-
+      {/* Dashboard Cards */}
       <div className="dashboard-cards">
-
         <div className="card">
-          <h2>{rowData.length}</h2>
+          <h2>{totalRecords}</h2>
           <p>Total Records</p>
         </div>
-
         <div className="card">
-          <h2>0</h2>
+          <h2>{readyForEnrollment}</h2>
           <p>Ready For Enrollment</p>
         </div>
-
         <div className="card">
-          <h2>0</h2>
+          <h2>{enrolledCount}</h2>
           <p>Enrolled</p>
         </div>
-
         <div className="card">
-          <h2>0</h2>
+          <h2>{pendingReview}</h2>
           <p>Pending Review</p>
         </div>
-
       </div>
 
+      {/* Toolbar */}
       <div className="toolbar">
-
-        <select>
-          <option>All Programs</option>
-          <option>MBA</option>
-          <option>MCA</option>
-          <option>BBA</option>
-          <option>BCA</option>
+        <select
+          value={programFilter}
+          onChange={(e) => setProgramFilter(e.target.value)}
+        >
+          <option value="">All Programs</option>
+          <option value="MBA">MBA</option>
+          <option value="MCA">MCA</option>
+          <option value="BBA">BBA</option>
+          <option value="BCA">BCA</option>
         </select>
 
         <input
           type="search"
           placeholder="Search Student"
+          value={searchText}
+          onChange={(e) => {
+            setSearchText(e.target.value);
+            gridRef.current?.api?.setGridOption('quickFilterText', e.target.value);
+          }}
         />
 
         <button
-          onClick={() =>
-            setShowUploadModal(true)
-          }
+          onClick={() => {
+            setAcademicYear('');
+            setIntake('');
+            setSelectedFile(null);
+            setShowUploadModal(true);
+          }}
+          disabled={isLoading || isEnrolling || isMarkingCRM}
         >
           Upload Raw Data
         </button>
 
-        <button>
-          Generate Enrollment Numbers
+        {/* Temporary manual CRM push button — replaced by API later */}
+        <button
+          onClick={handleMarkCRMComplete}
+          disabled={isMarkingCRM || isEnrolling}
+        >
+          {isMarkingCRM ? 'Updating…' : 'Mark CRM Push Complete'}
         </button>
 
-        <button>
-          Enroll Selected
+        <button
+          onClick={handleEnroll}
+          disabled={isEnrolling || isMarkingCRM}
+        >
+          {isEnrolling
+            ? `Enrolling… (${enrollProgress?.done ?? 0} / ${enrollProgress?.total ?? 0})`
+            : 'Enroll'}
         </button>
-
       </div>
 
-      <div
-        style={{
-          height: "650px",
-          width: "100%",
-          marginTop: "20px",
-        }}
-      >
+      {/* Grid */}
+      <div style={{ height: 650, width: '100%', marginTop: 16 }}>
         <AgGridReact
+          ref={gridRef}
           theme={themeQuartz}
           rowData={rowData}
           columnDefs={columnDefs}
+          rowSelection="multiple"
+          quickFilterText={searchText}
           pagination
           paginationPageSize={50}
-          rowSelection="multiple"
+          loading={isLoading}
         />
       </div>
 
+      {/* Upload Modal */}
       {showUploadModal && (
         <div className="modal-overlay">
           <div className="modal-content">
-
-            <h2>
-              Import Admissions Data
-            </h2>
+            <h2>Import Admissions Data</h2>
 
             <div className="form-group">
-
-              <label>
-                Academic Year
-              </label>
-
+              <label>Academic Year</label>
               <select
                 value={academicYear}
-                onChange={(e) =>
-                  setAcademicYear(
-                    e.target.value
-                  )
-                }
+                onChange={(e) => setAcademicYear(e.target.value)}
               >
-                <option value="">
-                  Select Academic Year
-                </option>
-
-                <option value="2026-27">
-                  2026-27
-                </option>
-
-                <option value="2027-28">
-                  2027-28
-                </option>
+                <option value="">Select Academic Year</option>
+                {academicYears.length > 0 ? (
+                  academicYears.map((y) => (
+                    <option key={y.id} value={y.academic_year}>
+                      {y.academic_year}
+                    </option>
+                  ))
+                ) : (
+                  <>
+                    <option value="2025">2025</option>
+                    <option value="2026">2026</option>
+                    <option value="2027">2027</option>
+                  </>
+                )}
               </select>
-
             </div>
 
             <div className="form-group">
-
               <label>Intake</label>
-
               <select
                 value={intake}
-                onChange={(e) =>
-                  setIntake(
-                    e.target.value
-                  )
-                }
+                onChange={(e) => setIntake(e.target.value)}
               >
-                <option value="">
-                  Select Intake
-                </option>
-
-                <option value="JAN">
-                  January
-                </option>
-
-                <option value="JUL">
-                  July
-                </option>
+                <option value="">Select Intake</option>
+                <option value="JAN">January</option>
+                <option value="JUL">July</option>
               </select>
-
             </div>
 
             <div className="form-group">
-
-              <label>
-                Excel / CSV File
-              </label>
-
+              <label>Excel / CSV File</label>
               <input
                 type="file"
                 accept=".xlsx,.xls,.csv"
-                onChange={(e) =>
-                  setSelectedFile(
-                    e.target.files[0]
-                  )
-                }
+                onChange={(e) => setSelectedFile(e.target.files[0])}
               />
-
             </div>
 
             <div className="modal-actions">
-
-              <button
-                onClick={handleUpload}
-              >
-                Upload
+              <button onClick={handleUpload} disabled={isUploading}>
+                {isUploading ? 'Uploading…' : 'Upload'}
               </button>
-
               <button
-                onClick={() =>
-                  setShowUploadModal(
-                    false
-                  )
-                }
+                onClick={() => setShowUploadModal(false)}
+                disabled={isUploading}
               >
                 Cancel
               </button>
-
             </div>
-
           </div>
         </div>
       )}
 
+      {/* Summary Modal */}
+      {showSummaryModal && uploadSummary && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h2>Upload Summary</h2>
+            <div className="summary-box">
+              <p>Total Uploaded:           <strong>{uploadSummary.total}</strong></p>
+              <p>Imported:                 <strong>{uploadSummary.valid}</strong></p>
+              <p>Enrollment Nos Generated: <strong>{uploadSummary.enrollGenerated}</strong></p>
+              <p>Failed:                   <strong>{uploadSummary.failed}</strong></p>
+              {uploadSummary.enrollErrors?.length > 0 && (
+                <p style={{ color: '#dc2626', marginTop: 8 }}>
+                  Enrollment No errors for {uploadSummary.enrollErrors.length} row(s) — check Pending Review.
+                </p>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button
+                onClick={() => downloadFailedReport(uploadSummary.failedRows)}
+                disabled={uploadSummary.failed === 0}
+              >
+                Download Failed Report
+              </button>
+              <button onClick={() => setShowSummaryModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
