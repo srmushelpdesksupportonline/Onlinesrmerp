@@ -1,15 +1,28 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../../supabaseClient";
 
 const PROGRAMS   = ["MBA","MCA","BBA","BCA"];
 const CATEGORIES = ["CORE","ELECTIVE_DEFAULT","SPECIALISATION_ELECTIVE","BRIDGE"];
 const COURSE_TYPES = ["Th","OP","P","I"];
+const COURSE_TYPE_LABEL = {
+  Th:  "Theory",
+  OP:  "Online Practical",
+  P:   "Project",
+  I:   "Internship",
+};
+const COURSE_TYPE_STYLE = {
+  Th:  { bg: "#dbeafe", text: "#1e40af" },
+  OP:  { bg: "#d1fae5", text: "#065f46" },
+  P:   { bg: "#fef3c7", text: "#92400e" },
+  I:   { bg: "#ede9fe", text: "#5b21b6" },
+};
 const SPEC_TYPES = ["Group","Open","Open Group"];
 
 const CATEGORY_LABEL = {
   CORE:                    "Core",
-  ELECTIVE_DEFAULT:        "Elective (Default)",
-  SPECIALISATION_ELECTIVE: "Specialisation Elective",
+  ELECTIVE_DEFAULT:        "Elective",
+  SPECIALISATION_ELECTIVE: "Spec. Elective",
   BRIDGE:                  "Bridge",
 };
 
@@ -21,7 +34,7 @@ const CATEGORY_STYLE = {
 };
 
 // ── Course Modal (Add / Edit) ─────────────────────────────────────────────────
-function CourseModal({ course, arId, programs, specGroups, onSave, onClose }) {
+function CourseModal({ course, arId: activeARNumber, programs, specGroups, onSave, onClose }) {
   const isNew = !course?.id;
   const [form, setForm] = useState({
     program_id:              course?.program_id || "",
@@ -196,60 +209,199 @@ function CourseModal({ course, arId, programs, specGroups, onSave, onClose }) {
 }
 
 // ── Create AR Modal ────────────────────────────────────────────────────────────
-function CreateARModal({ existingARs, programs, onSave, onClose }) {
-  const lastAR   = existingARs[0];
-  const nextNum  = String(existingARs.length + 1).padStart(2, "0");
-  const [form, setForm] = useState({
-    ar_number:    `AR-${nextNum}`,
-    ar_date:      "",
-    scheme_name:  "",
-    copyFromId:   lastAR?.id || "",
+function CreateARModal({ existingARs, programs, specGroups, onSave, onClose }) {
+  const lastAR  = existingARs[existingARs.length - 1];
+  const nextNum = String(existingARs.length + 1).padStart(2, "0");
+  const fileRef = useRef();
+
+  const [mode, setMode]       = useState("copy");   // "copy" | "upload"
+  const [form, setForm]       = useState({
+    ar_number:   `AR-${nextNum}`,
+    ar_date:     "",
+    scheme_name: "",
+    copyFromAR:  lastAR?.ar_number || "",
   });
-  const [saving, setSaving] = useState(false);
-  const [error,  setError]  = useState("");
+  const [uploadFile,    setUploadFile]    = useState(null);
+  const [uploadPreview, setUploadPreview] = useState([]);
+  const [saving,        setSaving]        = useState(false);
+  const [error,         setError]         = useState("");
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  // Parse uploaded Excel/CSV file
+  async function handleFileChange(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadFile(file);
+    const buf = await file.arrayBuffer();
+    const wb  = XLSX.read(buf);
+    const ws  = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    setUploadPreview(rows.slice(0, 5));
+  }
+
+  // Create schemes for all 4 programs and return map { program_code: scheme_id }
+  async function createSchemes() {
+    const intProgs = window._intPrograms || [];
+    const schemeMap = {};
+    for (const prog of intProgs) {
+      const { data: newScheme, error: se } = await supabase
+        .from("academic_schemes")
+        .insert({
+          program_id:  prog.id,
+          scheme_name: form.scheme_name,
+          session:     form.ar_date.includes("JAN") ? "JAN" : "JULY",
+          scheme_year: parseInt(form.ar_date.slice(-2)) + 2000 || 2025,
+          ar_number:   form.ar_number,
+          ar_date:     form.ar_date,
+          is_active:   false,
+        })
+        .select()
+        .single();
+      if (se) throw se;
+      schemeMap[prog.program_code] = { schemeId: newScheme.id, progId: prog.id };
+    }
+    return schemeMap;
+  }
 
   async function handleCreate() {
     if (!form.ar_date || !form.scheme_name) {
       setError("AR Date and Scheme Name are required."); return;
     }
+    if (mode === "upload" && !uploadFile) {
+      setError("Please select a file to upload."); return;
+    }
     setSaving(true); setError("");
     try {
-      // Create one scheme per program (use integer programs table for academic_schemes)
-      const intProgs = window._intPrograms || [];
-      for (const prog of intProgs) {
-        const { data: newScheme, error: se } = await supabase
-          .from("academic_schemes")
-          .insert({
-            program_id:  prog.id,
-            scheme_name: form.scheme_name,
-            session:     form.ar_date.includes("JAN") ? "JAN" : "JULY",
-            scheme_year: 2025,
-            ar_number:   form.ar_number,
-            ar_date:     form.ar_date,
-            is_active:   false,
-          })
-          .select()
-          .single();
-        if (se) throw se;
+      const schemeMap = await createSchemes();
+      const intProgs  = window._intPrograms || [];
 
-        // Copy courses from previous AR for this program
-        if (form.copyFromId) {
-          const { data: sourceCourses } = await supabase
+      if (mode === "copy") {
+        // Copy from existing AR — per program
+        let totalCopied = 0;
+        const copyErrors = [];
+
+        for (const prog of intProgs) {
+          const { schemeId } = schemeMap[prog.program_code] || {};
+          if (!schemeId) continue;
+
+          if (!form.copyFromAR) continue;
+
+          // Find source scheme for this program in the selected AR
+          const { data: sourceSchemes, error: ssErr } = await supabase
+            .from("academic_schemes")
+            .select("id")
+            .eq("ar_number", form.copyFromAR)
+            .eq("program_id", prog.id)
+            .limit(1);
+
+          if (ssErr || !sourceSchemes?.length) {
+            copyErrors.push(`No source scheme for ${prog.program_code} in ${form.copyFromAR}`);
+            continue;
+          }
+
+          const sourceSchemeId = sourceSchemes[0].id;
+
+          // Find UUID program_id in academic_programs
+          const uuidProg = (programs || []).find(p => p.program_code === prog.program_code);
+          if (!uuidProg) {
+            copyErrors.push(`UUID program not found for ${prog.program_code}`);
+            continue;
+          }
+
+          // Fetch source courses
+          const { data: sourceCourses, error: scErr } = await supabase
             .from("courses")
             .select("*")
-            .eq("scheme_id", form.copyFromId)
-            .eq("program_id", prog.id);
+            .eq("scheme_id", sourceSchemeId)
+            .eq("program_id", uuidProg.id);
 
-          if (sourceCourses && sourceCourses.length > 0) {
-            const copies = sourceCourses.map(({ id, created_at, ...rest }) => ({
+          if (scErr) { copyErrors.push(`Fetch error ${prog.program_code}: ${scErr.message}`); continue; }
+          if (!sourceCourses?.length) { copyErrors.push(`No courses found for ${prog.program_code} in ${form.copyFromAR}`); continue; }
+
+          // Insert courses - no suffix needed, unique constraint is (code, scheme_id, program_id)
+          for (const { id, created_at, scheme_id, ...rest } of sourceCourses) {
+            const { error: ie } = await supabase.from("courses").insert({
               ...rest,
-              scheme_id: newScheme.id,
-            }));
-            const { error: ce } = await supabase.from("courses").insert(copies);
-            if (ce) throw ce;
+              scheme_id: form.ar_number,
+            });
+            if (ie) copyErrors.push(`${rest.course_code}: ${ie.message}`);
+            else totalCopied++;
           }
+        }
+
+        if (copyErrors.length > 0) {
+          console.warn("Copy errors:", copyErrors);
+          if (totalCopied === 0) throw new Error("No courses were copied. Errors:\n" + copyErrors.slice(0, 3).join("\n"));
+        }
+      } else {
+        // Upload from file
+        const buf  = await uploadFile.arrayBuffer();
+        const wb   = XLSX.read(buf);
+        const ws   = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+        const PROG_MAP = {
+          MBA: "MBA", MCA: "MCA", BBA: "BBA", BCA: "BCA",
+          "Master of Business Administration": "MBA",
+          "Master of Computer Applications": "MCA",
+          "Bachelor of Business Administration": "BBA",
+          "Bachelor of Computer Applications": "BCA",
+        };
+        const TYPE_MAP = {
+          "Theory": "Th", "Th": "Th",
+          "Online Practical": "OP", "OP": "OP",
+          "Project": "P", "P": "P",
+          "Internship": "I", "I": "I",
+          "Project/Internship": "P",
+        };
+        const SPEC_TYPE_MAP = {
+          "Group": "Group", "Open": "Open", "Open Group": "Open Group",
+          "—": null, "": null,
+        };
+        const CAT_MAP = {
+          "Core": "CORE", "CORE": "CORE",
+          "Elective": "ELECTIVE_DEFAULT", "ELECTIVE_DEFAULT": "ELECTIVE_DEFAULT",
+          "Elective (Default)": "ELECTIVE_DEFAULT",
+          "Specialisation Elective": "SPECIALISATION_ELECTIVE",
+          "SPECIALISATION_ELECTIVE": "SPECIALISATION_ELECTIVE",
+          "Bridge": "BRIDGE", "BRIDGE": "BRIDGE",
+        };
+
+        const toInsert = [];
+        for (const row of rows) {
+          const progCode = PROG_MAP[String(row["Program"] || "").trim()];
+          if (!progCode) continue;
+          const { schemeId } = schemeMap[progCode] || {};
+          const uuidProg = (programs || []).find(p => p.program_code === progCode);
+          if (!schemeId || !uuidProg) continue;
+
+          // Match spec group by name
+          const groupName = String(row["Specialisation Group"] || "").trim();
+          const matchedGroup = specGroups.find(g => g.name === groupName);
+
+          toInsert.push({
+            program_id:              uuidProg.id,
+            scheme_id:               form.ar_number,
+            course_code:             String(row["Course Code"] || "").trim(),
+            course_name:             String(row["Course Name"] || "").trim(),
+            course_type:             TYPE_MAP[String(row["Course Type"] || "Th").trim()] || "Th",
+            credits:                 row["Credits"] !== "" ? Number(row["Credits"]) : null,
+            semester:                Number(row["Semester"] || 1),
+            category:                CAT_MAP[String(row["Category"] || "Core").trim()] || "CORE",
+            is_bridge:               String(row["Category"] || "").toLowerCase().includes("bridge"),
+            specialisation_type:     SPEC_TYPE_MAP[String(row["Specialisation Type"] || "").trim()] ?? (String(row["Specialisation Type"] || "").trim() || null),
+            specialisation_group_id: matchedGroup?.id || null,
+            ia_max:                  Number(row["IA Max"] || 30),
+            ia_min:                  Number(row["IA Min"] || 15),
+            ese_max:                 Number(row["ESE Max"] || 70),
+            ese_min:                 Number(row["ESE Min"] || 35),
+          });
+        }
+
+        if (toInsert.length > 0) {
+          const { error: ie } = await supabase.from("courses").insert(toInsert);
+          if (ie) throw ie;
         }
       }
       onSave();
@@ -262,16 +414,13 @@ function CreateARModal({ existingARs, programs, onSave, onClose }) {
 
   return (
     <div style={S.overlay}>
-      <div style={{ ...S.modal, maxWidth: 460 }}>
+      <div style={{ ...S.modal, maxWidth: 500 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ margin: 0 }}>Create New Academic Regulation</h3>
           <button onClick={onClose} style={S.closeBtn}>✕</button>
         </div>
 
-        <div style={{ background: "#f0f2e8", border: "1px solid #e8ead4", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: "#374151" }}>
-          All courses from <strong>{lastAR?.ar_number || "AR-01"}</strong> will be copied to the new AR as a starting point. You can edit, delete or add courses after creation.
-        </div>
-
+        {/* AR details */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div style={S.fg}>
             <label style={S.label}>AR Number</label>
@@ -282,17 +431,66 @@ function CreateARModal({ existingARs, programs, onSave, onClose }) {
             <input value={form.ar_date} onChange={e => set("ar_date", e.target.value)} style={S.input} placeholder="AR-07/25" />
           </div>
         </div>
-        <div style={{ ...S.fg, marginBottom: 12 }}>
+        <div style={{ ...S.fg, marginBottom: 16 }}>
           <label style={S.label}>Scheme Name * <span style={{ fontWeight: 400, color: "#9ca3af" }}>(e.g. July 2025)</span></label>
           <input value={form.scheme_name} onChange={e => set("scheme_name", e.target.value)} style={S.input} placeholder="July 2025" />
         </div>
-        <div style={{ ...S.fg, marginBottom: 16 }}>
-          <label style={S.label}>Copy courses from</label>
-          <select value={form.copyFromId} onChange={e => set("copyFromId", e.target.value)} style={S.input}>
-            <option value="">Start blank</option>
-            {existingARs.map(a => <option key={a.id} value={a.id}>{a.ar_number} — {a.scheme_name}</option>)}
-          </select>
+
+        {/* Mode toggle */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 16, borderRadius: 8, overflow: "hidden", border: "1.5px solid #d1d5db" }}>
+          {[["copy","📋 Copy from existing AR"], ["upload","📤 Upload file"]].map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              style={{
+                flex: 1, padding: "9px 0", border: "none", cursor: "pointer",
+                fontFamily: "inherit", fontSize: 13, fontWeight: mode === m ? 700 : 400,
+                background: mode === m ? "#2d3a0e" : "#fff",
+                color: mode === m ? "#fff" : "#374151",
+              }}
+            >{label}</button>
+          ))}
         </div>
+
+        {/* Copy mode */}
+        {mode === "copy" && (
+          <div style={{ ...S.fg, marginBottom: 16 }}>
+            <label style={S.label}>Copy courses from</label>
+            <select value={form.copyFromAR} onChange={e => set("copyFromAR", e.target.value)} style={S.input}>
+              <option value="">Start blank</option>
+              {existingARs.map(a => <option key={a.ar_number} value={a.ar_number}>{a.ar_number} — {a.scheme_name}</option>)}
+            </select>
+            {form.copyFromAR && (
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                All courses from <strong>{form.copyFromAR}</strong> will be copied. You can edit after creation.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Upload mode */}
+        {mode === "upload" && (
+          <div style={{ marginBottom: 16 }}>
+            <div
+              onClick={() => fileRef.current?.click()}
+              style={{ border: "2px dashed #d1d5db", borderRadius: 8, padding: "20px", textAlign: "center", cursor: "pointer", background: uploadFile ? "#f0fdf4" : "#fafafa", marginBottom: 10 }}
+            >
+              <div style={{ fontSize: 24, marginBottom: 6 }}>📄</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{uploadFile ? uploadFile.name : "Click to select Excel or CSV file"}</div>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>.xlsx, .csv — columns: Program, Semester, Course Code, Course Name, Course Type, Credits, Category, Specialisation Type, Specialisation Group, IA Max, IA Min, ESE Max, ESE Min, AR, Date</div>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleFileChange} />
+            </div>
+            {uploadPreview.length > 0 && (
+              <div style={{ overflowX: "auto", border: "1px solid #e8ead4", borderRadius: 8 }}>
+                <table style={{ fontSize: 11, borderCollapse: "collapse", minWidth: "100%" }}>
+                  <thead><tr style={{ background: "#f8f9f4" }}>{Object.keys(uploadPreview[0]).slice(0, 6).map(k => <th key={k} style={{ padding: "5px 8px", textAlign: "left", color: "#6b7280", borderBottom: "1px solid #e8ead4", whiteSpace: "nowrap" }}>{k}</th>)}</tr></thead>
+                  <tbody>{uploadPreview.map((r, i) => <tr key={i} style={{ borderBottom: "1px solid #f4f5f0" }}>{Object.values(r).slice(0, 6).map((v, j) => <td key={j} style={{ padding: "4px 8px", color: "#374151" }}>{String(v).slice(0, 25)}</td>)}</tr>)}</tbody>
+                </table>
+                <div style={{ padding: "6px 10px", fontSize: 11, color: "#6b7280" }}>Preview — first 5 rows, first 6 columns</div>
+              </div>
+            )}
+          </div>
+        )}
 
         {error && <div style={S.errorBox}>{error}</div>}
 
@@ -308,6 +506,35 @@ function CreateARModal({ existingARs, programs, onSave, onClose }) {
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
+function GroupBadge({ code, name, onClick }) {
+  const [show, setShow] = React.useState(false);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      onClick={e => { e.stopPropagation(); onClick && onClick(); }}
+    >
+      <span style={{ background: "#fef3c7", color: "#92400e", padding: "1px 7px", borderRadius: 8, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }}>
+        {code}
+      </span>
+      {show && (
+        <span style={{
+          position: "absolute", bottom: "calc(100% + 6px)", left: "50%",
+          transform: "translateX(-50%)",
+          background: "#1a1f0c", color: "#fff",
+          padding: "5px 10px", borderRadius: 6, fontSize: 12,
+          whiteSpace: "nowrap", zIndex: 999, pointerEvents: "none",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+        }}>
+          {name}
+          <span style={{ position: "absolute", top: "100%", left: "50%", transform: "translateX(-50%)", borderWidth: 4, borderStyle: "solid", borderColor: "#1a1f0c transparent transparent transparent" }} />
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function CourseMaster() {
   const [ars,         setArs]         = useState([]);  // distinct AR versions
   const [activeAR,    setActiveAR]    = useState(null);
@@ -324,7 +551,10 @@ export default function CourseMaster() {
   const [filterCategory, setFilterCategory] = useState("");
   const [filterSpecGroup,setFilterSpecGroup]= useState("");
   const [search,         setSearch]         = useState("");
-  const [groupSubjectMap, setGroupSubjectMap] = useState({}); // { course_id: [group_name, ...] }
+  const [groupSubjectMap, setGroupSubjectMap] = useState({});
+  const [editingAR,   setEditingAR]   = useState(false);
+  const [editARForm,  setEditARForm]  = useState({ ar_number: "", ar_date: "" });
+  const [savingAR,    setSavingAR]    = useState(false);
 
   // Load programs + spec groups once
   useEffect(() => {
@@ -332,7 +562,7 @@ export default function CourseMaster() {
       const [{ data: progs }, { data: intProgs }, { data: groups }] = await Promise.all([
         supabase.from("academic_programs").select("id, program_code, program_name, total_semesters").order("program_code"),
         supabase.from("programs").select("id, program_code, program_name, total_semesters").order("program_code"),
-        supabase.from("specialisation_groups").select("id, name, program_id").order("name"),
+        supabase.from("specialisation_groups").select("id, name, group_code, program_id").order("name"),
       ]);
       // academic_programs (UUID) used for courses FK
       setPrograms(progs || []);
@@ -376,23 +606,15 @@ export default function CourseMaster() {
     if (!activeAR) return;
     setLoading(true);
     try {
-      // Get all scheme IDs for this AR number
-      const { data: schemes } = await supabase
-        .from("academic_schemes")
-        .select("id")
-        .eq("ar_number", activeAR.ar_number);
-
-      const schemeIds = (schemes || []).map(s => s.id);
-      if (!schemeIds.length) { setCourses([]); return; }
-
+      // scheme_id is now ar_number text (e.g. "AR-01") — filter directly
       const { data, error } = await supabase
         .from("courses")
         .select(`
           *,
           academic_programs(program_code, program_name),
-          specialisation_groups(name)
+          specialisation_groups(name, group_code)
         `)
-        .in("scheme_id", schemeIds)
+        .eq("scheme_id", activeAR.ar_number)
         .order("semester")
         .order("course_code");
 
@@ -404,16 +626,19 @@ export default function CourseMaster() {
       if (courseList.length > 0) {
         const { data: mappings } = await supabase
           .from("specialisation_group_subjects")
-          .select("subjects(course_code), specialisation_groups(name)");
+          .select("subjects(course_code), specialisation_groups(name, group_code)");
 
         // Build map: course_code -> [group_name, ...]
         const map = {};
         for (const m of mappings || []) {
-          const code = m.subjects?.course_code;
-          const name = m.specialisation_groups?.name;
-          if (code && name) {
+          const code     = m.subjects?.course_code;
+          const shortCode = m.specialisation_groups?.group_code || m.specialisation_groups?.name || "";
+          const fullName  = m.specialisation_groups?.name || "";
+          if (code && shortCode) {
             if (!map[code]) map[code] = [];
-            if (!map[code].includes(name)) map[code].push(name);
+            if (!map[code].find(g => g.code === shortCode)) {
+              map[code].push({ code: shortCode, name: fullName });
+            }
           }
         }
         setGroupSubjectMap(map);
@@ -445,11 +670,17 @@ export default function CourseMaster() {
       }
     }
     if (filterSpecGroup) {
-      // Check via groupSubjectMap (course_code -> group names)
       const courseGroups = groupSubjectMap[c.course_code] || [];
-      // Find the selected group name
       const selectedGroup = specGroups.find(g => String(g.id) === String(filterSpecGroup));
-      if (!selectedGroup || !courseGroups.includes(selectedGroup.name)) return false;
+      if (!selectedGroup) return false;
+      // Must match both group name AND program
+      const intProg = (window._intPrograms || []).find(p => p.program_code === c.academic_programs?.program_code);
+      if (intProg && Number(selectedGroup.program_id) !== Number(intProg.id)) return false;
+      const match = courseGroups.find(g =>
+        (g.name || g) === selectedGroup.name ||
+        (g.code || g) === selectedGroup.group_code
+      );
+      if (!match) return false;
     }
     if (search) {
       const q = search.toLowerCase();
@@ -474,8 +705,89 @@ export default function CourseMaster() {
     return data?.id || null;
   };
 
+  async function handleDeleteAR(ar) {
+    if (ars.length <= 1) {
+      alert("Cannot delete the only AR. At least one AR must exist."); return;
+    }
+    if (!window.confirm(`Delete ${ar.ar_number} (${ar.ar_date})? This will permanently delete all courses in this AR. This cannot be undone.`)) return;
+    try {
+      // Delete all courses with this ar_number as scheme_id
+      await supabase.from("courses").delete().eq("scheme_id", ar.ar_number);
+      // Delete all academic_schemes for this ar_number
+      await supabase.from("academic_schemes").delete().eq("ar_number", ar.ar_number);
+
+      // Switch to first available AR
+      setActiveAR(null);
+      await loadARs();
+    } catch (e) {
+      alert("Delete failed: " + e.message);
+    }
+  }
+
+  async function handleSaveAREdit() {
+    if (!editARForm.ar_number || !editARForm.ar_date) return;
+    setSavingAR(true);
+    try {
+      // Update all academic_schemes with this ar_number
+      const { error } = await supabase
+        .from("academic_schemes")
+        .update({ ar_number: editARForm.ar_number, ar_date: editARForm.ar_date })
+        .eq("ar_number", activeAR.ar_number);
+      if (error) throw error;
+      // Also update courses.scheme_id since it stores ar_number as text
+      if (editARForm.ar_number !== activeAR.ar_number) {
+        await supabase
+          .from("courses")
+          .update({ scheme_id: editARForm.ar_number })
+          .eq("scheme_id", activeAR.ar_number);
+      }
+      setEditingAR(false);
+      setActiveAR(prev => ({ ...prev, ar_number: editARForm.ar_number, ar_date: editARForm.ar_date }));
+      await loadARs();
+    } catch (e) {
+      alert("Save failed: " + e.message);
+    } finally {
+      setSavingAR(false);
+    }
+  }
+
+  function startEditAR() {
+    setEditARForm({ ar_number: activeAR.ar_number, ar_date: activeAR.ar_date || "" });
+    setEditingAR(true);
+  }
+
+  function handleDownloadAR() {
+    if (!activeAR || courses.length === 0) return;
+    const rows = courses.map(c => ({
+      "Program":               c.academic_programs?.program_code || "",
+      "Semester":              c.semester,
+      "Course Code":           c.course_code,
+      "Course Name":           c.course_name,
+      "Course Type":           COURSE_TYPE_LABEL[c.course_type] || c.course_type || "",
+      "Credits":               c.credits ?? "",
+      "Category":              CATEGORY_LABEL[c.category] || c.category || "",
+      "Specialisation Type":   c.category === "ELECTIVE_DEFAULT" ? "Open" : c.category === "SPECIALISATION_ELECTIVE" ? "Group" : "",
+      "Specialisation Group":  (groupSubjectMap[c.course_code] || []).map(g => g.code || g).join(", ") || c.specialisation_groups?.group_code || c.specialisation_groups?.name || "",
+      "IA Max":                c.ia_max ?? 30,
+      "IA Min":                c.ia_min ?? 15,
+      "ESE Max":               c.ese_max ?? 70,
+      "ESE Min":               c.ese_min ?? 35,
+      "AR":                    activeAR.ar_number,
+      "Date":                  activeAR.ar_date || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, activeAR.ar_number);
+    // Auto column widths
+    const colWidths = Object.keys(rows[0] || {}).map(key => ({
+      wch: Math.max(key.length, ...rows.map(r => String(r[key] || "").length)) + 2
+    }));
+    ws["!cols"] = colWidths;
+    XLSX.writeFile(wb, `CourseMaster_${activeAR.ar_number}_${activeAR.ar_date || ""}.xlsx`);
+  }
+
   return (
-    <div style={{ fontFamily: "Inter, sans-serif", background: "#f4f5f0", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div style={{ fontFamily: "Inter, sans-serif", background: "#f4f5f0", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
       {/* ── Header ── */}
       <div style={{ padding: "14px 24px", background: "#fff", borderBottom: "1px solid #e8ead4", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
@@ -486,6 +798,11 @@ export default function CourseMaster() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {activeAR && courses.length > 0 && (
+            <button onClick={handleDownloadAR} style={S.outlineBtn}>
+              ⬇ Download {activeAR.ar_number}
+            </button>
+          )}
           <button onClick={() => setShowCreate(true)} style={S.primaryBtn}>+ Create New AR</button>
         </div>
       </div>
@@ -495,27 +812,37 @@ export default function CourseMaster() {
         {ars.length === 0 && (
           <div style={{ padding: "12px 0", fontSize: 13, color: "#9ca3af" }}>No Academic Regulations yet. Click "+ Create New AR" to begin.</div>
         )}
-        {ars.map(ar => (
-          <button
-            key={ar.id}
-            onClick={() => setActiveAR(ar)}
-            style={{
-              padding: "12px 20px",
-              border: "none",
-              background: "none",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 14,
-              fontWeight: activeAR?.ar_number === ar.ar_number ? 700 : 500,
-              color: activeAR?.ar_number === ar.ar_number ? "#2d3a0e" : "#6b7280",
-              borderBottom: activeAR?.ar_number === ar.ar_number ? "2px solid #c8a84b" : "2px solid transparent",
-              marginBottom: -1,
-            }}
-          >
-            {ar.ar_number}
-            {ar.ar_date && <span style={{ fontSize: 11, marginLeft: 6, color: "#9ca3af", fontWeight: 400 }}>{ar.ar_date}</span>}
-          </button>
-        ))}
+        {ars.map(ar => {
+          const isActive = activeAR?.ar_number === ar.ar_number;
+          return (
+            <div key={ar.id} style={{ display: "flex", alignItems: "center", borderBottom: isActive ? "2px solid #c8a84b" : "2px solid transparent", marginBottom: -1 }}>
+              <button
+                onClick={() => setActiveAR(ar)}
+                style={{
+                  padding: "12px 16px 12px 20px",
+                  border: "none", background: "none", cursor: "pointer",
+                  fontFamily: "inherit", fontSize: 14,
+                  fontWeight: isActive ? 700 : 500,
+                  color: isActive ? "#2d3a0e" : "#6b7280",
+                }}
+              >
+                {ar.ar_number}
+                {ar.ar_date && <span style={{ fontSize: 11, marginLeft: 6, color: "#9ca3af", fontWeight: 400 }}>{ar.ar_date}</span>}
+              </button>
+              {isActive && ars.length > 1 && (
+                <button
+                  onClick={() => handleDeleteAR(ar)}
+                  title={`Delete ${ar.ar_number}`}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    color: "#dc2626", fontSize: 13, padding: "4px 6px",
+                    borderRadius: 4, lineHeight: 1,
+                  }}
+                >✕</button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {activeAR && (
@@ -554,11 +881,14 @@ export default function CourseMaster() {
                 {specGroups
                   .filter(g => {
                     if (!filterProgram) return true;
-                    // specGroups.program_id is integer (from programs table)
                     const intProg = (window._intPrograms || []).find(p => p.program_code === filterProgram);
                     return intProg && Number(g.program_id) === Number(intProg.id);
                   })
-                  .map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  .map(g => {
+                    const intProg = (window._intPrograms || []).find(p => Number(p.id) === Number(g.program_id));
+                    const progLabel = intProg ? ` — ${intProg.program_code}` : "";
+                    return <option key={g.id} value={g.id}>{g.name}{g.group_code ? ` (${g.group_code})` : ""}{progLabel}</option>;
+                  })}
               </select>
             </div>
             <div style={{ ...S.fg, flex: 1, minWidth: 200 }}>
@@ -583,14 +913,45 @@ export default function CourseMaster() {
             </div>
           </div>
 
-          {/* ── Course Count ── */}
-          <div style={{ padding: "8px 24px", background: "#f8f9f4", borderBottom: "1px solid #e8ead4", fontSize: 13, color: "#6b7280", flexShrink: 0 }}>
-            Showing <strong style={{ color: "#2d3a0e" }}>{filtered.length}</strong> of <strong style={{ color: "#2d3a0e" }}>{courses.length}</strong> courses in <strong style={{ color: "#2d3a0e" }}>{activeAR.ar_number}</strong>
-            {activeAR.ar_date && <span style={{ marginLeft: 8, color: "#c8a84b", fontWeight: 600 }}>· {activeAR.ar_date}</span>}
+          {/* ── Course Count + AR Edit ── */}
+          <div style={{ padding: "8px 24px", background: "#f8f9f4", borderBottom: "1px solid #e8ead4", fontSize: 13, color: "#6b7280", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              Showing <strong style={{ color: "#2d3a0e" }}>{filtered.length}</strong> of <strong style={{ color: "#2d3a0e" }}>{courses.length}</strong> courses in{" "}
+              {editingAR ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+                  <input
+                    value={editARForm.ar_number}
+                    onChange={e => setEditARForm(f => ({ ...f, ar_number: e.target.value }))}
+                    placeholder="AR-02"
+                    style={{ padding: "3px 8px", border: "1.5px solid #c8a84b", borderRadius: 6, fontSize: 13, width: 80, outline: "none", fontWeight: 700, color: "#2d3a0e" }}
+                  />
+                  <input
+                    value={editARForm.ar_date}
+                    onChange={e => setEditARForm(f => ({ ...f, ar_date: e.target.value }))}
+                    placeholder="AR-07/25"
+                    style={{ padding: "3px 8px", border: "1.5px solid #c8a84b", borderRadius: 6, fontSize: 13, width: 90, outline: "none", color: "#c8a84b" }}
+                  />
+                  <button onClick={handleSaveAREdit} disabled={savingAR} style={{ padding: "3px 10px", background: "#3d4f12", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                    {savingAR ? "Saving…" : "Save"}
+                  </button>
+                  <button onClick={() => setEditingAR(false)} style={{ padding: "3px 8px", background: "none", border: "1px solid #d1d5db", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <span>
+                  <strong style={{ color: "#2d3a0e", marginLeft: 4 }}>{activeAR.ar_number}</strong>
+                  {activeAR.ar_date && <span style={{ marginLeft: 6, color: "#c8a84b", fontWeight: 600 }}>· {activeAR.ar_date}</span>}
+                  <button onClick={startEditAR} style={{ marginLeft: 10, padding: "2px 8px", background: "none", border: "1px solid #d1d5db", borderRadius: 5, cursor: "pointer", fontSize: 11, color: "#6b7280" }}>
+                    ✏️ Edit AR
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
 
           {/* ── Table ── */}
-          <div style={{ flex: 1, padding: "16px 24px", overflowX: "auto" }}>
+          <div style={{ flex: 1, padding: "16px 24px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {loading ? (
               <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Loading…</div>
             ) : filtered.length === 0 ? (
@@ -600,12 +961,37 @@ export default function CourseMaster() {
                 <div style={{ fontSize: 13, marginTop: 4 }}>Try changing filters or add a new course</div>
               </div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", borderRadius: 10, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-                <thead>
+              <div style={{ overflow: "auto", flex: 1, borderRadius: 10, boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff" }}>
+                <thead style={{ position: "sticky", top: 0, zIndex: 3 }}>
+                  {/* ── Group row ── */}
+                  <tr style={{ background: "#f0f2e8" }}>
+                    <th colSpan={2} style={{ ...TH.group, position: "sticky", top: 0, zIndex: 3, background: "#f0f2e8" }}></th>
+                    <th colSpan={5} style={{ ...TH.group, borderLeft: "1px solid #e8ead4", position: "sticky", top: 0, zIndex: 3, background: "#f0f2e8" }}>Course</th>
+                    <th colSpan={2} style={{ ...TH.group, borderLeft: "1px solid #e8ead4", position: "sticky", top: 0, zIndex: 3, background: "#f0f2e8" }}>Specialisation</th>
+                    <th colSpan={2} style={{ ...TH.group, borderLeft: "1px solid #e8ead4", position: "sticky", top: 0, zIndex: 3, background: "#f0f2e8" }}>IA</th>
+                    <th colSpan={2} style={{ ...TH.group, borderLeft: "1px solid #e8ead4", position: "sticky", top: 0, zIndex: 3, background: "#f0f2e8" }}>ESE</th>
+                    <th colSpan={2} style={{ ...TH.group, borderLeft: "1px solid #e8ead4", position: "sticky", top: 0, zIndex: 3, background: "#f0f2e8" }}>AR</th>
+                    <th style={{ ...TH.group, position: "sticky", top: 0, right: 0, zIndex: 4, background: "#f0f2e8", boxShadow: "-2px 0 4px rgba(0,0,0,0.06)" }}></th>
+                  </tr>
+                  {/* ── Sub-header row ── */}
                   <tr style={{ background: "#f8f9f4" }}>
-                    {["Program","Sem","Course Code","Course Name","Credits","Category","Specialisation","Spec. Group","IA Max","IA Min","ESE Max","ESE Min","AR","Date",""].map(h => (
-                      <th key={h} style={{ padding: "10px 12px", textAlign: "left", color: "#3d4f12", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: "2px solid #e8ead4", whiteSpace: "nowrap" }}>{h}</th>
-                    ))}
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Program</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Sem</th>
+                    <th style={{ ...TH.sub, borderLeft: "1px solid #e8ead4", position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Code</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Name</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Type</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Credits</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Category</th>
+                    <th style={{ ...TH.sub, borderLeft: "1px solid #e8ead4", position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Type</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Group</th>
+                    <th style={{ ...TH.sub, borderLeft: "1px solid #e8ead4", position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Max</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Min</th>
+                    <th style={{ ...TH.sub, borderLeft: "1px solid #e8ead4", position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Max</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Min</th>
+                    <th style={{ ...TH.sub, borderLeft: "1px solid #e8ead4", position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>No</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, zIndex: 3, background: "#f8f9f4" }}>Date</th>
+                    <th style={{ ...TH.sub, position: "sticky", top: 29, right: 0, zIndex: 4, background: "#f8f9f4", boxShadow: "-2px 0 4px rgba(0,0,0,0.06)" }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -623,6 +1009,16 @@ export default function CourseMaster() {
                         <td style={{ padding: "9px 12px", minWidth: 200 }}>
                           {c.course_name}
                           {c.is_bridge && <span style={{ marginLeft: 6, background: "#fef3c7", color: "#92400e", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>Bridge</span>}
+                        </td>
+                        <td style={{ padding: "9px 12px" }}>
+                          {(() => {
+                            const st = COURSE_TYPE_STYLE[c.course_type] || { bg: "#f3f4f6", text: "#374151" };
+                            return (
+                              <span style={{ background: st.bg, color: st.text, padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                                {COURSE_TYPE_LABEL[c.course_type] || c.course_type || "—"}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td style={{ padding: "9px 12px", textAlign: "center" }}>{c.credits ?? <span style={{ color: "#9ca3af" }}>—</span>}</td>
                         <td style={{ padding: "9px 12px" }}>
@@ -647,15 +1043,17 @@ export default function CourseMaster() {
                             if (groups.length > 0) {
                               return (
                                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                  {groups.map((g, i) => (
-                                    <span key={i} style={{ background: "#fef3c7", color: "#92400e", padding: "1px 7px", borderRadius: 8, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{g}</span>
-                                  ))}
+                                  {groups.map((g, i) => {
+                                    const grp = specGroups.find(sg => sg.name === (g.name || g) || sg.group_code === (g.code || g));
+                                    return <GroupBadge key={i} code={g.code || g} name={g.name || g} onClick={() => grp && setFilterSpecGroup(String(grp.id))} />;
+                                  })}
                                 </div>
                               );
                             }
                             // Fall back to direct FK group
-                            if (c.specialisation_groups?.name) {
-                              return <span style={{ background: "#fef3c7", color: "#92400e", padding: "1px 7px", borderRadius: 8, fontSize: 11, fontWeight: 600 }}>{c.specialisation_groups.name}</span>;
+                            if (c.specialisation_groups?.group_code || c.specialisation_groups?.name) {
+                              const grp = specGroups.find(sg => sg.id === c.specialisation_group_id);
+                              return <GroupBadge code={c.specialisation_groups.group_code || c.specialisation_groups.name} name={c.specialisation_groups.name} onClick={() => grp && setFilterSpecGroup(String(grp.id))} />;
                             }
                             return <span style={{ color: "#9ca3af" }}>—</span>;
                           })()}
@@ -666,7 +1064,7 @@ export default function CourseMaster() {
                         <td style={{ padding: "9px 12px", textAlign: "center" }}>{c.ese_min ?? 35}</td>
                         <td style={{ padding: "9px 12px", fontSize: 12, fontWeight: 600, color: "#2d3a0e", whiteSpace: "nowrap" }}>{activeAR.ar_number}</td>
                         <td style={{ padding: "9px 12px", fontSize: 12, color: "#c8a84b", fontWeight: 600, whiteSpace: "nowrap" }}>{activeAR.ar_date || "—"}</td>
-                        <td style={{ padding: "9px 12px" }}>
+                        <td style={{ padding: "9px 12px", position: "sticky", right: 0, background: i % 2 === 0 ? "#fff" : "#fafbf7", zIndex: 1, boxShadow: "-2px 0 4px rgba(0,0,0,0.06)" }}>
                           <div style={{ display: "flex", gap: 4 }}>
                             <button
                               onClick={() => setCourseModal(c)}
@@ -683,6 +1081,7 @@ export default function CourseMaster() {
                   })}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         </>
@@ -693,6 +1092,7 @@ export default function CourseMaster() {
         <CreateARModal
           existingARs={ars}
           programs={programs}
+          specGroups={specGroups}
           onSave={() => { setShowCreate(false); loadARs(); }}
           onClose={() => setShowCreate(false)}
         />
@@ -701,7 +1101,7 @@ export default function CourseMaster() {
       {courseModal && (
         <CourseModal
           course={courseModal._new ? null : courseModal}
-          arId={activeAR?.id}
+          arId={activeAR?.ar_number}
           programs={programs}
           specGroups={specGroups}
           onSave={() => { setCourseModal(null); loadCourses(); }}
@@ -711,6 +1111,31 @@ export default function CourseMaster() {
     </div>
   );
 }
+
+const TH = {
+  group: {
+    padding: "6px 12px",
+    textAlign: "center",
+    color: "#2d3a0e",
+    fontWeight: 700,
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    borderBottom: "1px solid #e8ead4",
+    whiteSpace: "nowrap",
+  },
+  sub: {
+    padding: "8px 12px",
+    textAlign: "left",
+    color: "#3d4f12",
+    fontWeight: 700,
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    borderBottom: "2px solid #e8ead4",
+    whiteSpace: "nowrap",
+  },
+};
 
 const S = {
   overlay:   { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 },
