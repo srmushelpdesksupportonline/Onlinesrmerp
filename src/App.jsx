@@ -19,6 +19,7 @@ import ResultUpload    from "./pages/results/ResultUpload.jsx";
 import ResultByStudent from "./pages/results/ResultByStudent.jsx";
 import ResultBySubject from "./pages/results/ResultBySubject.jsx";
 import Grades          from "./pages/results/Grades.jsx";
+import PublishResults  from "./pages/results/PublishResults.jsx";
 
 export default function App() {
   return (
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/results/by-student"   element={<ResultByStudent />} />
         <Route path="/results/by-subject"   element={<ResultBySubject />} />
         <Route path="/results/grades"       element={<Grades />} />
+        <Route path="/results/publish"      element={<PublishResults />} />
 
         <Route path="*" element={<div style={{ padding: 24 }}>Page not found</div>} />
       </Route>

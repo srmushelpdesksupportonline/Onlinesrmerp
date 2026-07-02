@@ -18,7 +18,7 @@ export function getProgramType(programCode) {
 // BATCH ORDERING — compares batches like "JAN-25", "JUL-25", "JAN-26" etc.
 // so we can determine which scheme is "effective" for a given batch.
 // ─────────────────────────────────────────────────────────────────────────────
-function batchSortKey(batch) {
+export function batchSortKey(batch) {
   if (!batch) return -Infinity; // no batch = treat as earliest possible
   // Accepts both the old 'JAN-25' (2-digit year) and new 'Jan-2025' (4-digit year) formats
   const match = String(batch).trim().toUpperCase().match(/^(JAN|JUL)-(\d{2}|\d{4})$/);

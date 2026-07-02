@@ -577,3 +577,27 @@ export const RESULT_COLORS = {
   P: { bg: '#DCFCE7', text: '#166534' },
   F: { bg: '#FEF2F2', text: '#DC2626' },
 };
+
+// Real values used across the app for student_master.student_status
+// (see src/pages/Students.jsx filter dropdown — there is no WITHDRAWN value today).
+export const STUDENT_STATUS_OPTIONS = ['ENROLLED', 'ACTIVE', 'INACTIVE', 'COMPLETED'];
+
+/**
+ * Bulk-fetch student_status for a list of enrollment numbers, batched to
+ * respect Supabase's .in() practical limits. Used to enrich results rows
+ * (which don't store student_status themselves) for the Status filter.
+ */
+export async function fetchStudentStatusMap(enrollmentNos) {
+  const unique = [...new Set((enrollmentNos || []).filter(Boolean))];
+  const map = {};
+  for (let i = 0; i < unique.length; i += 500) {
+    const chunk = unique.slice(i, i + 500);
+    const { data, error } = await supabase
+      .from('student_master')
+      .select('enrollment_no, student_status')
+      .in('enrollment_no', chunk);
+    if (error) throw error;
+    (data || []).forEach(r => { map[r.enrollment_no] = r.student_status; });
+  }
+  return map;
+}
