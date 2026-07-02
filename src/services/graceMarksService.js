@@ -41,6 +41,35 @@ export async function fetchActiveGracePolicy(batch) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CYCLE ROW FETCH — batched to bypass Supabase's default 1000-row query cap
+// (see fetchPendingCycles / other services for the same pattern)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function fetchCycleRows({ programCode, semester, examMonthYear }) {
+  const BATCH = 1000;
+  let all = [];
+  let from = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('student_results')
+      .select('*')
+      .eq('program_code', programCode)
+      .eq('semester', parseInt(semester))
+      .eq('exam_month_year', examMonthYear)
+      .eq('result_stage', 'INTERIM')
+      .range(from, from + BATCH - 1);
+    if (error) throw error;
+    const chunk = data || [];
+    all = [...all, ...chunk];
+    hasMore = chunk.length === BATCH;
+    from += BATCH;
+    if (from > 50000) break;
+  }
+  return all;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ELIGIBILITY EVALUATION
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -103,16 +132,7 @@ export async function computeGraceReview({ programCode, semester, examMonthYear 
     throw new Error('programCode, semester and examMonthYear are required.');
   }
 
-  const { data: allRows, error } = await supabase
-    .from('student_results')
-    .select('*')
-    .eq('program_code', programCode)
-    .eq('semester', parseInt(semester))
-    .eq('exam_month_year', examMonthYear)
-    .eq('result_stage', 'INTERIM');
-  if (error) throw error;
-
-  const rows = allRows || [];
+  const rows = await fetchCycleRows({ programCode, semester, examMonthYear });
   const failingRows = rows.filter(r => r.result === 'F');
   const passingCount = rows.length - failingRows.length;
 
@@ -248,14 +268,7 @@ export async function publishFinalResults({ programCode, semester, examMonthYear
     throw new Error('programCode, semester and examMonthYear are required.');
   }
 
-  const { data: rows, error } = await supabase
-    .from('student_results')
-    .select('*')
-    .eq('program_code', programCode)
-    .eq('semester', parseInt(semester))
-    .eq('exam_month_year', examMonthYear)
-    .eq('result_stage', 'INTERIM');
-  if (error) throw error;
+  const rows = await fetchCycleRows({ programCode, semester, examMonthYear });
 
   const approvedSet = new Set(approvedIds || []);
   const now = new Date().toISOString();
