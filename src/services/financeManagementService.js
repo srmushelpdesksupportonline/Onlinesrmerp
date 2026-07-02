@@ -181,7 +181,7 @@ export async function fetchFeeAssignments(filters = {}) {
   }));
 }
 
-export async function createFeeAssignment({ block_id, enrollment_no, program_code, semester, academic_year_id, intake, assigned_by, notes }) {
+export async function createFeeAssignment({ block_id, enrollment_no, program_code, semester, academic_year_id, batch, assigned_by, notes }) {
   const { data, error } = await supabase
     .from('fee_assignments')
     .insert({
@@ -190,7 +190,7 @@ export async function createFeeAssignment({ block_id, enrollment_no, program_cod
       program_code:      program_code  || null,
       semester:          semester      || null,
       academic_year_id:  academic_year_id || null,
-      intake:            intake        || null,
+      batch:             batch         || null,
       assigned_by:       assigned_by   || null,
       notes:             notes         || null,
     })
@@ -235,9 +235,9 @@ export async function fetchGeneratedFees(filters = {}) {
 
 // Check eligibility conditions for a student against the configured rules
 function checkConditions(student, financeRow, conditions) {
-  // conditions: { require_no_backlogs, require_full_fee_paid, semester, program_code, intake, batch }
+  // conditions: { require_no_backlogs, require_full_fee_paid, semester, program_code, batch }
   if (conditions.program_code && student.program_code !== conditions.program_code) return false;
-  if (conditions.intake && financeRow?.intake !== conditions.intake) return false;
+  if (conditions.batch && financeRow?.batch !== conditions.batch) return false;
   if (conditions.require_full_fee_paid && financeRow?.payment_status !== 'COMPLETED') return false;
   return true;
 }
@@ -268,7 +268,7 @@ export async function generateFeesForBlock({ block_id, conditions = {}, generate
   const enrollmentNos = (students || []).map(s => s.enrollment_no);
   const { data: financeRows } = await supabase
     .from('student_finance')
-    .select('enrollment_no, payment_status, intake, balance_due')
+    .select('enrollment_no, payment_status, batch, balance_due')
     .in('enrollment_no', enrollmentNos);
 
   const financeMap = {};
@@ -352,7 +352,7 @@ export async function fetchStudentOverview(filters = {}) {
 
   if (filters.program_code)   query = query.eq('program_code',   filters.program_code);
   if (filters.payment_status) query = query.eq('payment_status', filters.payment_status);
-  if (filters.intake)         query = query.eq('intake',         filters.intake);
+  if (filters.batch)          query = query.eq('batch',          filters.batch);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -439,7 +439,18 @@ export function formatINR(amount) {
 
 export const PROGRAM_CODES = ['MBA', 'MCA', 'BBA', 'BCA'];
 export const FEE_TYPES      = ['SEMESTER', 'ANNUAL', 'COURSE'];
-export const INTAKE_OPTIONS = ['JAN', 'JUL'];
+// Batch values are now combined month+year (e.g. 'Jan-2025'), so they can't be
+// a fixed array like the old ['JAN', 'JUL'] intake options — fetch the distinct
+// set actually in use from student_finance instead.
+export async function fetchBatchOptions() {
+  const { data, error } = await supabase
+    .from('student_finance')
+    .select('batch')
+    .not('batch', 'is', null);
+  if (error) throw error;
+  const unique = [...new Set((data || []).map(r => r.batch))];
+  return unique.sort();
+}
 
 export const STATUS_COLORS = {
   ACTIVE:   { bg: '#DCFCE7', text: '#166534' },

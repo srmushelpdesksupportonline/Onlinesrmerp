@@ -17,14 +17,17 @@ export const PROGRAM_EMAIL_NAMES = {
   BCA: 'bca',
 };
 
-// Full intake name for email: JUL → july, JAN → january
-export const INTAKE_FULL_NAMES = {
+// Full month name for email: JUL → july, JAN → january
+// (This represents the month component used while generating enrollment
+//  numbers/emails during admission, before a student has an actual `batch`
+//  value derived from their enrollment number.)
+export const BATCH_MONTH_FULL_NAMES = {
   JAN: 'january',
   JUL: 'july',
 };
 
 // Session code for enrollment number: 1=Jan, 2=Jul
-export const INTAKE_CODES = {
+export const BATCH_MONTH_CODES = {
   JAN: '1',
   JUL: '2',
 };
@@ -46,13 +49,13 @@ export function getProgramShortCode(program) {
   return map[code] || code;
 }
 
-export function getIntakeCode(intake) {
-  return INTAKE_CODES[(intake || '').toUpperCase().trim()] || '2';
+export function getBatchMonthCode(month) {
+  return BATCH_MONTH_CODES[(month || '').toUpperCase().trim()] || '2';
 }
 
-// Returns full intake name for email: 'JUL' → 'July', 'JAN' → 'January'
-export function getIntakeFullName(intake) {
-  return INTAKE_FULL_NAMES[(intake || '').toUpperCase().trim()] || 'July';
+// Returns full month name for email: 'JUL' → 'July', 'JAN' → 'January'
+export function getBatchMonthFullName(month) {
+  return BATCH_MONTH_FULL_NAMES[(month || '').toUpperCase().trim()] || 'July';
 }
 
 export function getYearCode(academicYear) {

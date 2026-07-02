@@ -47,7 +47,7 @@ export default function Admissions() {
   // ── Upload modal ──────────────────────────────────────────────────────────
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [academicYear, setAcademicYear]       = useState('');
-  const [intake, setIntake]                   = useState('');
+  const [month, setMonth]                     = useState('');
   const [selectedFile, setSelectedFile]       = useState(null);
   const [isUploading, setIsUploading]         = useState(false);
 
@@ -66,7 +66,7 @@ export default function Admissions() {
     { headerName: 'Application No', field: 'application_no',                       width: 160 },
     { headerName: 'Student Name',   field: 'full_name_as_per_your_10th_marksheet', flex: 2, minWidth: 200 },
     { headerName: 'Program',        field: 'course',                                width: 90  },
-    { headerName: 'Intake',         field: 'intake',                                width: 80  },
+    { headerName: 'Batch',          field: 'batch',                                 width: 100 },
     { headerName: 'Personal Email', field: 'email_id',                              flex: 2, minWidth: 200 },
     { headerName: 'Mobile',         field: 'mobile_number',                         width: 150 },
     { headerName: 'Enrollment No',  field: 'enrollment_no',  width: 160 },
@@ -145,7 +145,7 @@ export default function Admissions() {
   // ── Upload handler ────────────────────────────────────────────────────────
   const handleUpload = () => {
     if (!academicYear) { alert('Please select Academic Year'); return; }
-    if (!intake)       { alert('Please select Intake');        return; }
+    if (!month)        { alert('Please select Batch Month');   return; }
     if (!selectedFile) { alert('Please select a file');        return; }
 
     const ext    = selectedFile.name.split('.').pop().toLowerCase();
@@ -230,7 +230,7 @@ export default function Admissions() {
         const enrollErrors  = [];
 
         if (validRows.length > 0) {
-          const mapped       = validRows.map((vr) => mapRowToMerritoImport(vr, intake, academicYear));
+          const mapped       = validRows.map((vr) => mapRowToMerritoImport(vr, month, academicYear));
           const insertedRows = await insertAdmissions(mapped);
 
           for (const insertedRow of insertedRows) {
@@ -431,7 +431,7 @@ export default function Admissions() {
         <button
           onClick={() => {
             setAcademicYear('');
-            setIntake('');
+            setMonth('');
             setSelectedFile(null);
             setShowUploadModal(true);
           }}
@@ -503,12 +503,12 @@ export default function Admissions() {
             </div>
 
             <div className="form-group">
-              <label>Intake</label>
+              <label>Batch Month</label>
               <select
-                value={intake}
-                onChange={(e) => setIntake(e.target.value)}
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
               >
-                <option value="">Select Intake</option>
+                <option value="">Select Batch Month</option>
                 <option value="JAN">January</option>
                 <option value="JUL">July</option>
               </select>

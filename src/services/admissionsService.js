@@ -3,8 +3,8 @@ import {
   PROGRAM_EMAIL_NAMES,
   getProgramCode,
   getProgramShortCode,
-  getIntakeCode,
-  getIntakeFullName,
+  getBatchMonthCode,
+  getBatchMonthFullName,
   getYearCode,
   generateEnrollmentNumber,
 } from './enrollmentService';
@@ -213,7 +213,11 @@ export async function getEnrolledCount() {
 
 // ── MAPPING ───────────────────────────────────────────────────────────────────
 
-export function mapRowToMerritoImport(row, intake, academicYear) {
+export function mapRowToMerritoImport(row, month, academicYear) {
+  const monthLabel = (month || '').toUpperCase().trim() === 'JUL' ? 'Jul' : 'Jan';
+  const yearLabel   = (academicYear || '').toString().trim().slice(0, 4);
+  const batch       = yearLabel ? `${monthLabel}-${yearLabel}` : null;
+
   return {
     application_no:    String(row['Application No'] || '').trim(),
     course:            (row['Program Applied For'] || row['Course'] || '').toUpperCase().trim(),
@@ -223,7 +227,7 @@ export function mapRowToMerritoImport(row, intake, academicYear) {
       row['Full Name'] || '',
     mobile_number:     String(row['Mobile Number'] || '').trim(),
     email_id:          (row['Email ID'] || row['Email Id'] || '').toLowerCase().trim(),
-    intake,
+    batch,
     academic_year:     academicYear,
     enrollment_no:     null,
     api_push_status:   'PENDING',
@@ -269,7 +273,8 @@ export async function markCRMPushComplete(ids) {
  */
 export async function generateAndSaveEnrollmentNo(row) {
   const programCode = getProgramCode(row.course);
-  const sessionCode = getIntakeCode(row.intake);
+  const month        = (row.batch || '').split('-')[0].toUpperCase(); // 'Jan-2025' -> 'JAN'
+  const sessionCode = getBatchMonthCode(month);
   const yearCode    = getYearCode(row.academic_year);  // already 2-digit
 
   const enrollmentNo = await generateEnrollmentNumber(
@@ -292,12 +297,14 @@ export async function generateAndSaveEnrollmentNo(row) {
 
 const _lookupCache = {};
 
-export async function getLookupIds(course, intake, academicYear) {
-  const key = `${course}|${intake}|${academicYear}`;
+export async function getLookupIds(course, month, academicYear) {
+  const key = `${course}|${month}|${academicYear}`;
   if (_lookupCache[key]) return _lookupCache[key];
 
-  // Convert intake (JAN/JUL) to enrollment code (1/2)
-  const intakeEnrollmentCode = intake === 'JAN' ? '1' : '2';
+  // Convert month (JAN/JUL) to enrollment code (1/2) for the intake_sessions lookup table
+  // (intake_sessions is an internal admission-processing table, out of scope for the
+  //  batch rename — it represents a session config, not a student's batch)
+  const monthEnrollmentCode = month === 'JAN' ? '1' : '2';
 
   const [programResult, sessionResult, yearResult, typeResult] =
     await Promise.all([
@@ -305,7 +312,7 @@ export async function getLookupIds(course, intake, academicYear) {
       supabase
         .from('intake_sessions')
         .select('id')
-        .eq('enrollment_code', intakeEnrollmentCode)
+        .eq('enrollment_code', monthEnrollmentCode)
         .limit(1)
         .maybeSingle(),
       supabase
@@ -325,9 +332,9 @@ export async function getLookupIds(course, intake, academicYear) {
   if (programResult.error)
     throw new Error(`Program lookup failed for "${course}": ${programResult.error.message}`);
   if (sessionResult.error)
-    throw new Error(`Intake session lookup failed for "${intake}": ${sessionResult.error.message}`);
+    throw new Error(`Intake session lookup failed for "${month}": ${sessionResult.error.message}`);
   if (!sessionResult.data)
-    throw new Error(`No intake session found for code "${intakeEnrollmentCode}"`);
+    throw new Error(`No intake session found for code "${monthEnrollmentCode}"`);
   if (yearResult.error)
     throw new Error(`Academic year lookup failed for "${academicYear}": ${yearResult.error.message}`);
   if (!yearResult.data)
@@ -352,7 +359,7 @@ export async function getLookupIds(course, intake, academicYear) {
 
 /**
  * Generate official email using smart name extraction (client-side).
- * Format: {firstName}.{programCode}{intakeCode}ul{yearCode}@srmus.edu.in
+ * Format: {firstName}.{programCode}{monthCode}ul{yearCode}@srmus.edu.in
  * 
  * Example:
  * - ANNAMALAI PR, MBA, JUL, 26 → annamalai.mbaul26@srmus.edu.in
@@ -360,12 +367,12 @@ export async function getLookupIds(course, intake, academicYear) {
  * - RYAN NOLAN D, BBA, JUL, 26 → ryannolan.bbaul26@srmus.edu.in
  * - R ADITHYA, MBA, JUL, 26 → adithya.mbaul26@srmus.edu.in (skips R initial)
  */
-export function generateOfficialEmail(fullName, course, intake, yearCode) {
+export function generateOfficialEmail(fullName, course, month, yearCode) {
   const { firstName } = parseName(fullName);
   const programShort   = getProgramShortCode(course).toLowerCase(); // 'mba','mca','bba','bca'
-  const intakeFull     = getIntakeFullName(intake).toLowerCase();    // 'july' or 'january'
+  const monthFull       = getBatchMonthFullName(month).toLowerCase();  // 'july' or 'january'
   // Format: annamalai.mbajuly26@srmus.edu.in
-  const emailPrefix = `${firstName.toLowerCase()}.${programShort}${intakeFull}${yearCode}`;
+  const emailPrefix = `${firstName.toLowerCase()}.${programShort}${monthFull}${yearCode}`;
   return `${emailPrefix}@srmus.edu.in`;
 }
 
@@ -506,8 +513,15 @@ function parseDateSafeInline(val) {
 async function autoSetupFinance(student) {
   const programCode     = normalisePCode(student.program_name);
   const rawData         = student.raw_data || {};
-  const intake          = rawData['Intake'] || rawData['intake'] || student.intake || null;
   const academicYear    = rawData['Academic Year'] || rawData['academic_year'] || student.academic_year || null;
+  const rawMonth        = rawData['Intake'] || rawData['intake'] || null;
+  // student.batch is the combined 'Jan-2025' value passed in by the caller (from
+  // merrito_import.batch). Fall back to building it from raw Excel data if absent.
+  const batch = student.batch || (
+    rawMonth && academicYear
+      ? `${(rawMonth || '').toUpperCase().trim() === 'JUL' ? 'Jul' : 'Jan'}-${(academicYear || '').toString().trim().slice(0, 4)}`
+      : null
+  );
   const scholarship     = detectScholarshipInline(rawData);
   const paymentPlan     = detectPlanInline(rawData);
   const fees            = calcFeesInline(programCode, paymentPlan, scholarship);
@@ -521,7 +535,7 @@ async function autoSetupFinance(student) {
       enrollment_no:      student.enrollment_no,
       program_code:       programCode,
       program_name:       student.program_name,
-      intake,
+      batch,
       academic_year:      academicYear,
       full_program_fee:   fees.full_program_fee,
       total_semesters:    fees.total_semesters,
@@ -590,7 +604,7 @@ export async function enrollStudent(row, lookupIds) {
   const yearCode = getYearCode(row.academic_year);
 
   const officialEmail = generateOfficialEmail(
-    fullName, row.course, row.intake, yearCode
+    fullName, row.course, (row.batch || '').split('-')[0].toUpperCase(), yearCode
   );
   const password = generatePassword(fullName);
 
@@ -615,6 +629,7 @@ export async function enrollStudent(row, lookupIds) {
       official_email:            officialEmail,
       student_status:            'ENROLLED',
       current_semester:          1,
+      batch:                     row.batch,
       program_name:              row.course,
       specialization:            rawData['Specialization'] || '',
       admission_type:            'Normal',
@@ -737,7 +752,7 @@ export async function enrollStudent(row, lookupIds) {
   try {
     await autoSetupFinance({
       ...newStudent,
-      intake:        row.intake,
+      batch:         row.batch,
       academic_year: row.academic_year,
     });
   } catch (financeErr) {

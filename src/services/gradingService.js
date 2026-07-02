@@ -20,10 +20,11 @@ export function getProgramType(programCode) {
 // ─────────────────────────────────────────────────────────────────────────────
 function batchSortKey(batch) {
   if (!batch) return -Infinity; // no batch = treat as earliest possible
-  const match = String(batch).trim().toUpperCase().match(/^(JAN|JUL)-(\d{2})$/);
+  // Accepts both the old 'JAN-25' (2-digit year) and new 'Jan-2025' (4-digit year) formats
+  const match = String(batch).trim().toUpperCase().match(/^(JAN|JUL)-(\d{2}|\d{4})$/);
   if (!match) return -Infinity;
   const [, month, yy] = match;
-  const year = 2000 + parseInt(yy, 10);
+  const year = yy.length === 4 ? parseInt(yy, 10) : 2000 + parseInt(yy, 10);
   const half = month === 'JAN' ? 0 : 1; // JAN comes before JUL in the same year
   return year * 2 + half;
 }
@@ -110,7 +111,7 @@ export async function getApplicableScheme(programType, batch) {
  * Calculate the letter grade for a result row.
  * @param {Object} params
  * @param {string} params.programCode   e.g. 'MBA'
- * @param {string} params.batch         e.g. 'JAN-25' (the `intake` field)
+ * @param {string} params.batch         e.g. 'Jan-2025' (the `batch` field)
  * @param {number|null} params.iaMarks
  * @param {string|number|null} params.eseMarks  ('AB' or numeric)
  * @param {number|null} params.totalMarks
@@ -295,7 +296,7 @@ async function buildSchemeResolver() {
  * reused in-memory for every row (no per-row DB round-trip for scheme lookup).
  * Updates are batched via upsert instead of one UPDATE per row.
  *
- * @param {Object} filters - optional { program_code, intake }
+ * @param {Object} filters - optional { program_code, batch }
  * @param {Function} onProgress - optional callback(done, total) for UI progress
  */
 export async function recalculateGrades(filters = {}, onProgress) {
@@ -304,7 +305,7 @@ export async function recalculateGrades(filters = {}, onProgress) {
   // Get total count first for progress reporting
   let countQuery = supabase.from('student_results').select('id', { count: 'exact', head: true });
   if (filters.program_code) countQuery = countQuery.eq('program_code', filters.program_code);
-  if (filters.intake)       countQuery = countQuery.eq('intake', filters.intake);
+  if (filters.batch)        countQuery = countQuery.eq('batch', filters.batch);
   const { count: totalCount } = await countQuery;
 
   const BATCH = 1000;
@@ -317,11 +318,11 @@ export async function recalculateGrades(filters = {}, onProgress) {
   while (hasMore) {
     let query = supabase
       .from('student_results')
-      .select('id, program_code, intake, ia_marks, ese_marks, total_marks')
+      .select('id, program_code, batch, ia_marks, ese_marks, total_marks')
       .range(from, from + BATCH - 1);
 
     if (filters.program_code) query = query.eq('program_code', filters.program_code);
-    if (filters.intake)       query = query.eq('intake', filters.intake);
+    if (filters.batch)        query = query.eq('batch', filters.batch);
 
     const { data, error } = await query;
     if (error) throw error;
@@ -333,7 +334,7 @@ export async function recalculateGrades(filters = {}, onProgress) {
     const updates = [];
     for (const row of batch) {
       const programType = getProgramType(row.program_code);
-      const scheme = programType ? resolveScheme(programType, row.intake) : null;
+      const scheme = programType ? resolveScheme(programType, row.batch) : null;
       const grade = calculateGradeWithScheme(scheme, {
         iaMarks:    row.ia_marks,
         eseMarks:   row.ese_marks,

@@ -4,7 +4,7 @@ import { themeQuartz } from 'ag-grid-community';
 import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
 import {
   fetchResultsBySubject, fetchSubjectNames, fetchBacklogSummary,
-  fetchResultFilterOptions, PROGRAM_CODES, INTAKE_OPTIONS, RESULT_COLORS,
+  fetchResultFilterOptions, PROGRAM_CODES, RESULT_COLORS,
 } from '../../services/resultsService';
 import { formatINR } from '../../services/financeManagementService';
 
@@ -158,7 +158,7 @@ function BacklogFeeModal({ backlogStudents, filters, onClose }) {
 export default function ResultBySubject() {
   const [results,       setResults]       = useState([]);
   const [backlogStudents, setBacklogStudents] = useState([]);
-  const [filterOptions, setFilterOptions] = useState({ programs: [], academicYears: [], intakes: [], semesters: [], examMonthYears: [] });
+  const [filterOptions, setFilterOptions] = useState({ programs: [], academicYears: [], batches: [], semesters: [], examMonthYears: [] });
   const [subjectNames,  setSubjectNames]  = useState([]);
   const [loading,       setLoading]       = useState(false);
   const [showBacklogModal, setShowBacklogModal] = useState(false);
@@ -168,7 +168,7 @@ export default function ResultBySubject() {
   const [filterSem,      setFilterSem]      = useState('');
   const [filterSubject,  setFilterSubject]  = useState('');
   const [filterYear,     setFilterYear]     = useState('');
-  const [filterIntake,   setFilterIntake]   = useState('');
+  const [filterBatch,   setFilterBatch]   = useState('');
   const [filterExamDate, setFilterExamDate] = useState('');
   const [filterResult,   setFilterResult]   = useState('');
   const [search,         setSearch]         = useState('');
@@ -197,7 +197,7 @@ export default function ResultBySubject() {
           semester:        filterSem      || undefined,
           course_name:     filterSubject  || undefined,
           academic_year:   filterYear     || undefined,
-          intake:          filterIntake   || undefined,
+          batch:           filterBatch    || undefined,
           exam_month_year: filterExamDate || undefined,
           result:          filterResult   || undefined,
         }),
@@ -205,14 +205,14 @@ export default function ResultBySubject() {
           program_code:  filterProgram || undefined,
           semester:      filterSem     || undefined,
           academic_year: filterYear    || undefined,
-          intake:        filterIntake  || undefined,
+          batch:         filterBatch   || undefined,
         }),
       ]);
       setResults(res);
       setBacklogStudents(bl);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [filterProgram, filterSem, filterSubject, filterYear, filterIntake, filterExamDate, filterResult]);
+  }, [filterProgram, filterSem, filterSubject, filterYear, filterBatch, filterExamDate, filterResult]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -278,10 +278,10 @@ export default function ResultBySubject() {
         </div>
         <div>
           <label style={S.label}>Batch</label>
-          <select value={filterIntake} onChange={e => setFilterIntake(e.target.value)}
+          <select value={filterBatch} onChange={e => setFilterBatch(e.target.value)}
             style={{ ...S.input, width: 110, margin: 0 }}>
             <option value="">All</option>
-            {filterOptions.intakes.map(i => <option key={i} value={i}>{i}</option>)}
+            {filterOptions.batches.map(i => <option key={i} value={i}>{i}</option>)}
           </select>
         </div>
         <div>
@@ -306,13 +306,13 @@ export default function ResultBySubject() {
             style={{ ...S.input, width: 200, margin: 0 }} />
         </div>
         {(() => {
-          const hasFilters = !!(filterProgram || filterSem || filterSubject || filterYear || filterIntake || filterExamDate || filterResult || search);
+          const hasFilters = !!(filterProgram || filterSem || filterSubject || filterYear || filterBatch || filterExamDate || filterResult || search);
           return (
             <div style={{ alignSelf: 'flex-end' }}>
               <button
                 onClick={() => {
                   setFilterProgram(''); setFilterSem(''); setFilterSubject('');
-                  setFilterYear(''); setFilterIntake(''); setFilterExamDate(''); setFilterResult(''); setSearch('');
+                  setFilterYear(''); setFilterBatch(''); setFilterExamDate(''); setFilterResult(''); setSearch('');
                 }}
                 disabled={!hasFilters}
                 style={{
@@ -375,7 +375,7 @@ export default function ResultBySubject() {
                   ? <span style={{ background: '#EEF2FF', color: '#6366F1', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{p.value}</span>
                   : '—' },
               { headerName: 'Year',     field: 'academic_year', minWidth: 90,  flex: 0.9, valueFormatter: p => p.value || '—' },
-              { headerName: 'Batch',    field: 'intake',        minWidth: 90,  flex: 0.9,
+              { headerName: 'Batch',    field: 'batch',         minWidth: 90,  flex: 0.9,
                 cellRenderer: p => p.value
                   ? <span style={{ background: '#F0FDF4', color: '#166534', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>{p.value}</span>
                   : '—' },
@@ -425,7 +425,7 @@ export default function ResultBySubject() {
       {showBacklogModal && (
         <BacklogFeeModal
           backlogStudents={backlogStudents}
-          filters={{ filterProgram, filterSem, filterYear, filterIntake }}
+          filters={{ filterProgram, filterSem, filterYear, filterBatch }}
           onClose={() => setShowBacklogModal(false)}
         />
       )}

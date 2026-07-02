@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import { themeQuartz } from 'ag-grid-community';
 import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
 import {
-  fetchStudentOverview, formatINR, PROGRAM_CODES, INTAKE_OPTIONS, STATUS_COLORS,
+  fetchStudentOverview, formatINR, PROGRAM_CODES, fetchBatchOptions, STATUS_COLORS,
   fetchPaymentHistory, recordPayment,
   PAYMENT_PLAN_LABELS, PAYMENT_STATUS_COLORS,
 } from '../../services/financeManagementService';
@@ -262,13 +262,16 @@ export default function StudentOverview() {
   const [loading,       setLoading]       = useState(false);
   const [filterProgram, setFilterProgram] = useState('');
   const [filterStatus,  setFilterStatus]  = useState('');
-  const [filterIntake,  setFilterIntake]  = useState('');
+  const [filterBatch,   setFilterBatch]   = useState('');
   const [search,        setSearch]        = useState('');
   const [showSearch,    setShowSearch]    = useState(false);
   const [showPayment,   setShowPayment]   = useState(false);
   const [showHistory,   setShowHistory]   = useState(false);
   const [selectedRow,   setSelectedRow]   = useState(null);
+  const [batchOptions,  setBatchOptions]  = useState([]);
   const gridRef = useRef();
+
+  useEffect(() => { fetchBatchOptions().then(setBatchOptions).catch(() => {}); }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -276,12 +279,12 @@ export default function StudentOverview() {
       const data = await fetchStudentOverview({
         program_code:   filterProgram || undefined,
         payment_status: filterStatus  || undefined,
-        intake:         filterIntake  || undefined,
+        batch:          filterBatch   || undefined,
       });
       setRecords(data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [filterProgram, filterStatus, filterIntake]);
+  }, [filterProgram, filterStatus, filterBatch]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -306,7 +309,7 @@ export default function StudentOverview() {
     { field: 'enrollment_no', headerName: 'Enrollment No', minWidth: 140, pinned: 'left', cellStyle: { fontWeight: 600, userSelect: 'text', cursor: 'text' } },
     { field: 'full_name',     headerName: 'Name',          minWidth: 160, pinned: 'left', cellStyle: { userSelect: 'text', cursor: 'text' } },
     { field: 'program_code',  headerName: 'Program',       width: 90 },
-    { field: 'intake',        headerName: 'Intake',        width: 80 },
+    { field: 'batch',         headerName: 'Batch',         width: 100 },
     { field: 'payment_plan',  headerName: 'Plan',          width: 120, valueFormatter: p => PAYMENT_PLAN_LABELS[p.value] || p.value || '—' },
     { field: 'scholarship_code', headerName: 'Scholarship', width: 120, valueFormatter: p => p.value || '—' },
     { field: 'discount_type',    headerName: 'Discount',   width: 120, valueFormatter: p => p.value || '—' },
@@ -376,9 +379,9 @@ export default function StudentOverview() {
           <option value="PARTIAL">Partial</option>
           <option value="COMPLETED">Completed</option>
         </select>
-        <select value={filterIntake} onChange={e => setFilterIntake(e.target.value)} style={{ ...S.input, width: 130, margin: 0 }}>
-          <option value="">All Intakes</option>
-          {INTAKE_OPTIONS.map(i => <option key={i} value={i}>{i === 'JAN' ? 'January' : 'July'}</option>)}
+        <select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} style={{ ...S.input, width: 130, margin: 0 }}>
+          <option value="">All Batches</option>
+          {batchOptions.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
         <button onClick={load} style={S.outlineBtn}>Apply</button>
         <span style={{ marginLeft: 'auto', fontSize: 13, color: '#6B7280' }}>

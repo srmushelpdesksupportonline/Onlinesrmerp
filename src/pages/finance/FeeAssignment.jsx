@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   fetchFeeAssignments, createFeeAssignment, deleteFeeAssignment,
   fetchFeeBlocks, fetchAcademicYears,
-  formatINR, PROGRAM_CODES, INTAKE_OPTIONS,
+  formatINR, PROGRAM_CODES, fetchBatchOptions,
 } from '../../services/financeManagementService';
 
 const S = {
@@ -19,15 +19,15 @@ const S = {
   infoBox:    { background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E40AF', borderRadius: 8, padding: '8px 14px', fontSize: 13, marginBottom: 12 },
 };
 
-function AssignModal({ blocks, academicYears, onClose, onSaved }) {
-  const [assignType, setAssignType] = useState('batch'); // 'batch' or 'student'
+function AssignModal({ blocks, academicYears, batchOptions, onClose, onSaved }) {
+  const [assignType, setAssignType] = useState('batch'); // 'batch' (bulk, by program) or 'student' (single) — unrelated to the student batch field below
   const [form, setForm] = useState({
     block_id:         '',
     enrollment_no:    '',
     program_code:     '',
     semester:         '',
     academic_year_id: '',
-    intake:           '',
+    batch:            '',
     assigned_by:      '',
     notes:            '',
   });
@@ -51,7 +51,7 @@ function AssignModal({ blocks, academicYears, onClose, onSaved }) {
         program_code:     assignType === 'batch'   ? form.program_code  : null,
         semester:         form.semester         || null,
         academic_year_id: form.academic_year_id || null,
-        intake:           form.intake           || null,
+        batch:            form.batch            || null,
       });
       onSaved();
     } catch (e) { setError(e.message); } finally { setSaving(false); }
@@ -86,7 +86,7 @@ function AssignModal({ blocks, academicYears, onClose, onSaved }) {
 
         <div style={S.infoBox}>
           {assignType === 'batch'
-            ? 'Assigns this fee block to all students matching the selected program / semester / intake.'
+            ? 'Assigns this fee block to all students matching the selected program / semester / batch.'
             : 'Assigns this fee block to a single student by enrollment number.'}
         </div>
 
@@ -122,10 +122,10 @@ function AssignModal({ blocks, academicYears, onClose, onSaved }) {
               </select>
             </div>
             <div>
-              <label style={S.label}>Intake</label>
-              <select style={S.input} value={form.intake} onChange={e => set('intake', e.target.value)}>
-                <option value="">All Intakes</option>
-                {INTAKE_OPTIONS.map(i => <option key={i} value={i}>{i}</option>)}
+              <label style={S.label}>Batch</label>
+              <select style={S.input} value={form.batch} onChange={e => set('batch', e.target.value)}>
+                <option value="">All Batches</option>
+                {batchOptions.map(b => <option key={b} value={b}>{b}</option>)}
               </select>
             </div>
           </div>
@@ -170,6 +170,7 @@ export default function FeeAssignment() {
   const [assignments,   setAssignments]   = useState([]);
   const [blocks,        setBlocks]        = useState([]);
   const [academicYears, setAcademicYears] = useState([]);
+  const [batchOptions,  setBatchOptions]  = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [showModal,     setShowModal]     = useState(false);
   const [error,         setError]         = useState('');
@@ -178,14 +179,16 @@ export default function FeeAssignment() {
   async function load() {
     setLoading(true);
     try {
-      const [a, b, y] = await Promise.all([
+      const [a, b, y, bo] = await Promise.all([
         fetchFeeAssignments({ program_code: filterProgram || undefined }),
         fetchFeeBlocks(),
         fetchAcademicYears(),
+        fetchBatchOptions(),
       ]);
       setAssignments(a);
       setBlocks(b);
       setAcademicYears(y);
+      setBatchOptions(bo);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
@@ -231,7 +234,7 @@ export default function FeeAssignment() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: '#F9FAFB' }}>
-                {['Fee Block', 'Assigned To', 'Program', 'Semester', 'Intake', 'Academic Year', 'Block Total', 'Assigned At', 'Actions'].map(h => (
+                {['Fee Block', 'Assigned To', 'Program', 'Semester', 'Batch', 'Academic Year', 'Block Total', 'Assigned At', 'Actions'].map(h => (
                   <th key={h} style={{ padding: '11px 14px', textAlign: 'left', color: '#6B7280', fontWeight: 600, borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -251,7 +254,7 @@ export default function FeeAssignment() {
                   </td>
                   <td style={{ padding: '11px 14px', color: '#374151' }}>{a.program_code || '—'}</td>
                   <td style={{ padding: '11px 14px', color: '#374151' }}>{a.semester ? `Sem ${a.semester}` : '—'}</td>
-                  <td style={{ padding: '11px 14px', color: '#374151' }}>{a.intake || '—'}</td>
+                  <td style={{ padding: '11px 14px', color: '#374151' }}>{a.batch || '—'}</td>
                   <td style={{ padding: '11px 14px', color: '#374151' }}>{a.academic_year_label}</td>
                   <td style={{ padding: '11px 14px', fontWeight: 600, color: '#111827' }}>{formatINR(a.block_total)}</td>
                   <td style={{ padding: '11px 14px', color: '#6B7280' }}>{new Date(a.assigned_at).toLocaleDateString('en-IN')}</td>
@@ -269,6 +272,7 @@ export default function FeeAssignment() {
         <AssignModal
           blocks={blocks}
           academicYears={academicYears}
+          batchOptions={batchOptions}
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load(); }}
         />

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   fetchGeneratedFees, generateFeesForBlock, markGeneratedFeePaid,
-  fetchFeeBlocks, formatINR, PROGRAM_CODES, STATUS_COLORS,
+  fetchFeeBlocks, formatINR, PROGRAM_CODES, STATUS_COLORS, fetchBatchOptions,
 } from '../../services/financeManagementService';
 
 const S = {
@@ -32,7 +32,7 @@ function GenerateModal({ blocks, onClose, onDone }) {
   const [form, setForm] = useState({
     block_id:                '',
     program_code:            '',
-    intake:                  '',
+    batch:                   '',
     semester:                '',
     require_full_fee_paid:   false,
     require_no_backlogs:     false,
@@ -42,6 +42,9 @@ function GenerateModal({ blocks, onClose, onDone }) {
   const [running,  setRunning]  = useState(false);
   const [result,   setResult]   = useState(null);
   const [error,    setError]    = useState('');
+  const [batchOptions, setBatchOptions] = useState([]);
+
+  useEffect(() => { fetchBatchOptions().then(setBatchOptions).catch(() => {}); }, []);
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
 
@@ -53,7 +56,7 @@ function GenerateModal({ blocks, onClose, onDone }) {
     try {
       const conditions = {
         program_code:          form.program_code          || undefined,
-        intake:                form.intake                || undefined,
+        batch:                 form.batch                 || undefined,
         semester:              form.semester ? parseInt(form.semester) : undefined,
         require_full_fee_paid: form.require_full_fee_paid,
         require_no_backlogs:   form.require_no_backlogs,
@@ -116,11 +119,10 @@ function GenerateModal({ blocks, onClose, onDone }) {
             </select>
           </div>
           <div>
-            <label style={S.label}>Intake</label>
-            <select style={S.input} value={form.intake} onChange={e => set('intake', e.target.value)}>
-              <option value="">All Intakes</option>
-              <option value="JAN">January</option>
-              <option value="JUL">July</option>
+            <label style={S.label}>Batch</label>
+            <select style={S.input} value={form.batch} onChange={e => set('batch', e.target.value)}>
+              <option value="">All Batches</option>
+              {batchOptions.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
         </div>

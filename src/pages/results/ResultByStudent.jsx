@@ -59,7 +59,7 @@ function StudentDetailPanel({ student, onClose }) {
           <div>
             <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{student.student_name || student.enrollment_no}</h3>
             <div style={{ fontSize: 13, color: '#6B7280', marginTop: 3 }}>
-              {student.enrollment_no} · {student.program_code} · {student.academic_year} · {student.intake}
+              {student.enrollment_no} · {student.program_code} · {student.academic_year} · {student.batch}
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6B7280' }}>✕</button>
@@ -141,14 +141,14 @@ function StudentDetailPanel({ student, onClose }) {
 // ── MAIN ─────────────────────────────────────────────────────────────────────
 export default function ResultByStudent() {
   const [summaries,     setSummaries]     = useState([]);
-  const [filterOptions, setFilterOptions] = useState({ programs: [], academicYears: [], intakes: [], semesters: [] });
+  const [filterOptions, setFilterOptions] = useState({ programs: [], academicYears: [], batches: [], semesters: [] });
   const [loading,       setLoading]       = useState(true);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const gridRef = useRef();
   const [search,        setSearch]        = useState('');
   const [filterProgram, setFilterProgram] = useState('');
   const [filterYear,    setFilterYear]    = useState('');
-  const [filterIntake,  setFilterIntake]  = useState('');
+  const [filterBatch,  setFilterBatch]  = useState('');
   const [filterSem,     setFilterSem]     = useState('');
   const [showBacklogsOnly, setShowBacklogsOnly] = useState(false);
 
@@ -156,17 +156,17 @@ export default function ResultByStudent() {
     setLoading(true);
     try {
       const [s, opts] = await Promise.all([
-        // Don't pass intake/year to summary — we want ALL subjects counted per student
-        // Filtering by intake/year happens on the list display level
+        // Don't pass batch/year to summary — we want ALL subjects counted per student
+        // Filtering by batch/year happens on the list display level
         fetchStudentResultSummaries({
           program_code: filterProgram || undefined,
           semester:     filterSem     || undefined,
         }),
         fetchResultFilterOptions(),
       ]);
-      // Apply intake and year filter on the client side for list display
+      // Apply batch and year filter on the client side for list display
       const filtered_ = s.filter(student => {
-        if (filterIntake && student.intake !== filterIntake) return false;
+        if (filterBatch && student.batch !== filterBatch) return false;
         if (filterYear   && student.academic_year !== filterYear) return false;
         return true;
       });
@@ -174,7 +174,7 @@ export default function ResultByStudent() {
       setFilterOptions(opts);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [filterProgram, filterYear, filterIntake, filterSem]);
+  }, [filterProgram, filterYear, filterBatch, filterSem]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -230,9 +230,9 @@ export default function ResultByStudent() {
           <option value="">All Years</option>
           {filterOptions.academicYears.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
-        <select value={filterIntake} onChange={e => setFilterIntake(e.target.value)} style={{ ...S.input, width: 120, margin: 0 }}>
+        <select value={filterBatch} onChange={e => setFilterBatch(e.target.value)} style={{ ...S.input, width: 120, margin: 0 }}>
           <option value="">All Batches</option>
-          {filterOptions.intakes.map(i => <option key={i} value={i}>{i}</option>)}
+          {filterOptions.batches.map(i => <option key={i} value={i}>{i}</option>)}
         </select>
         <button
           onClick={() => setShowBacklogsOnly(b => !b)}
@@ -247,12 +247,12 @@ export default function ResultByStudent() {
           {showBacklogsOnly ? '⚠ Backlogs Only' : 'All Students'}
         </button>
         {(() => {
-          const hasFilters = !!(filterProgram || filterSem || filterYear || filterIntake || search || showBacklogsOnly);
+          const hasFilters = !!(filterProgram || filterSem || filterYear || filterBatch || search || showBacklogsOnly);
           return (
             <button
               onClick={() => {
                 setFilterProgram(''); setFilterSem(''); setFilterYear('');
-                setFilterIntake(''); setSearch(''); setShowBacklogsOnly(false);
+                setFilterBatch(''); setSearch(''); setShowBacklogsOnly(false);
               }}
               disabled={!hasFilters}
               style={{
@@ -302,7 +302,7 @@ export default function ResultByStudent() {
                   ? <span style={{ background: '#EEF2FF', color: '#6366F1', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{p.value}</span>
                   : '—' },
               { headerName: 'Year',     field: 'academic_year', minWidth: 90, flex: 0.9, valueFormatter: p => p.value || '—' },
-              { headerName: 'Intake',   field: 'intake',        minWidth: 80, flex: 0.8,
+              { headerName: 'Batch',    field: 'batch',         minWidth: 100, flex: 0.9,
                 cellRenderer: p => p.value
                   ? <span style={{ background: '#F0FDF4', color: '#166534', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>{p.value}</span>
                   : '—' },

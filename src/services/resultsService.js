@@ -160,7 +160,7 @@ export function smartParseSheet(rawRows) {
 
   return { rows, courseName, courseCode, semester };
 }
-export function parseResultRows(rows, { programCode, semester, academicYear, intake, examMonthYear, schemeId, uploadedBy }) {
+export function parseResultRows(rows, { programCode, semester, academicYear, batch, examMonthYear, schemeId, uploadedBy }) {
   const records = [];
 
   for (const row of rows) {
@@ -256,7 +256,7 @@ export function parseResultRows(rows, { programCode, semester, academicYear, int
       course_code:    null,
       scheme_id:      schemeId     || null,
       academic_year:  academicYear   || null,
-      intake:         intake         || null,
+      batch:          batch          || null,
       exam_month_year: examMonthYear || null,
       ia_marks:       iaMarks,
       ese_marks:      eseMarks,
@@ -377,7 +377,7 @@ export async function fetchResultsByStudent(filters = {}) {
   if (filters.enrollment_no) query = query.eq('enrollment_no', filters.enrollment_no);
   if (filters.program_code)  query = query.eq('program_code',  filters.program_code);
   if (filters.academic_year) query = query.eq('academic_year', filters.academic_year);
-  if (filters.intake)        query = query.eq('intake',        filters.intake);
+  if (filters.batch)        query = query.eq('batch',        filters.batch);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -445,7 +445,7 @@ export async function fetchResultsBySubject(filters = {}) {
     if (filters.semester)        query = query.eq('semester',        parseInt(filters.semester));
     if (filters.course_name)     query = query.eq('course_name',     filters.course_name);
     if (filters.academic_year)   query = query.eq('academic_year',   filters.academic_year);
-    if (filters.intake)          query = query.eq('intake',          filters.intake);
+    if (filters.batch)          query = query.eq('batch',          filters.batch);
     if (filters.result)          query = query.eq('result',          filters.result);
     if (filters.exam_month_year) query = query.eq('exam_month_year', filters.exam_month_year);
 
@@ -493,7 +493,7 @@ export async function fetchSubjectNames(programCode, semester) {
 export async function fetchBacklogSummary(filters = {}) {
   let query = supabase
     .from('student_results')
-    .select('enrollment_no, student_name, official_email, program_code, semester, course_name, academic_year, intake')
+    .select('enrollment_no, student_name, official_email, program_code, semester, course_name, academic_year, batch')
     .eq('is_backlog', true)
     .range(0, 9999)
     .order('enrollment_no');
@@ -501,7 +501,7 @@ export async function fetchBacklogSummary(filters = {}) {
   if (filters.program_code)  query = query.eq('program_code',  filters.program_code);
   if (filters.semester)      query = query.eq('semester',      parseInt(filters.semester));
   if (filters.academic_year) query = query.eq('academic_year', filters.academic_year);
-  if (filters.intake)        query = query.eq('intake',        filters.intake);
+  if (filters.batch)        query = query.eq('batch',        filters.batch);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -516,7 +516,7 @@ export async function fetchBacklogSummary(filters = {}) {
         official_email: row.official_email,
         program_code:   row.program_code,
         academic_year:  row.academic_year,
-        intake:         row.intake,
+        batch:          row.batch,
         backlogs:       [],
       };
     }
@@ -539,16 +539,16 @@ export async function fetchBacklogSummary(filters = {}) {
 export async function fetchResultFilterOptions() {
   const { data, error } = await supabase
     .from('student_results')
-    .select('program_code, academic_year, intake, semester, exam_month_year');
+    .select('program_code, academic_year, batch, semester, exam_month_year');
   if (error) throw error;
 
   const programs        = [...new Set((data || []).map(r => r.program_code).filter(Boolean))].sort();
   const academicYears   = [...new Set((data || []).map(r => r.academic_year).filter(Boolean))].sort().reverse();
-  const intakes         = [...new Set((data || []).map(r => r.intake).filter(Boolean))].sort();
+  const batches          = [...new Set((data || []).map(r => r.batch).filter(Boolean))].sort();
   const semesters       = [...new Set((data || []).map(r => r.semester).filter(Boolean))].sort((a, b) => a - b);
   const examMonthYears  = [...new Set((data || []).map(r => r.exam_month_year).filter(Boolean))].sort();
 
-  return { programs, academicYears, intakes, semesters, examMonthYears };
+  return { programs, academicYears, batches, semesters, examMonthYears };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -570,7 +570,8 @@ export async function deleteResults(filters) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const PROGRAM_CODES  = ['MBA', 'MCA', 'BBA', 'BCA'];
-export const INTAKE_OPTIONS = ['JAN', 'JUL'];
+// Batch options are now fetched dynamically via fetchResultFilterOptions().batches
+// (batch values include the year, e.g. 'Jan-2025', so a fixed array no longer works)
 
 export const RESULT_COLORS = {
   P: { bg: '#DCFCE7', text: '#166534' },

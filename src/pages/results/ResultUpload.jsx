@@ -32,16 +32,16 @@ function detectProgramFromEnrollment(enrollmentNo) {
   return { MB: 'MBA', MC: 'MCA', BB: 'BBA', BC: 'BCA' }[prog] || null;
 }
 
-// ── Auto-detect batch (intake) and academic year from enrollment number ───────
-// New format: Batch = "JAN-25" / "JUL-25", Academic Year = single year "2025"
-function detectIntakeYearFromEnrollment(enrollmentNo) {
-  if (!enrollmentNo || enrollmentNo.length < 6) return { intake: null, academicYear: null };
-  const intakeCode = enrollmentNo[3];
-  const yy         = enrollmentNo.slice(4, 6);
-  const intakeMonth = intakeCode === '2' ? 'JUL' : intakeCode === '1' ? 'JAN' : null;
-  const intake       = intakeMonth ? `${intakeMonth}-${yy}` : null;
+// ── Auto-detect batch and academic year from enrollment number ────────────────
+// Batch format: "Jan-2025" / "Jul-2025" (month + 4-digit year), Academic Year = single year "2025"
+function detectBatchFromEnrollment(enrollmentNo) {
+  if (!enrollmentNo || enrollmentNo.length < 6) return { batch: null, academicYear: null };
+  const monthCode = enrollmentNo[3];
+  const yy        = enrollmentNo.slice(4, 6);
+  const monthLabel = monthCode === '2' ? 'Jul' : monthCode === '1' ? 'Jan' : null;
+  const batch        = monthLabel ? `${monthLabel}-20${yy}` : null;
   const academicYear = yy ? `20${yy}` : null;
-  return { intake, academicYear };
+  return { batch, academicYear };
 }
 
 // ── Auto-detect semester from filename ────────────────────────────────────────
@@ -69,7 +69,7 @@ function getFirstEnrollment(rows) {
 function autoDetect(fileName, sheetName, rows) {
   const firstEnrollment = getFirstEnrollment(rows);
   const program      = detectProgramFromEnrollment(firstEnrollment);
-  const { intake, academicYear } = detectIntakeYearFromEnrollment(firstEnrollment);
+  const { batch, academicYear } = detectBatchFromEnrollment(firstEnrollment);
   const semester     = detectSemesterFromFilename(fileName);
   const courseName   = detectSubjectFromSheet(sheetName, fileName) || extractSubjectFromFileName(fileName);
 
@@ -77,14 +77,14 @@ function autoDetect(fileName, sheetName, rows) {
     programCode:  program     || '',
     semester:     semester    || '',
     academicYear: academicYear|| '',
-    intake:       intake      || '',
+    batch:        batch       || '',
     courseName:   courseName  || '',
     // Track what was auto-detected vs needs manual input
     autoDetected: {
       programCode:  !!program,
       semester:     !!semester,
       academicYear: !!academicYear,
-      intake:       !!intake,
+      batch:        !!batch,
       courseName:   !!courseName,
     },
   };
@@ -133,19 +133,19 @@ export default function ResultUpload() {
     const sheetSemester   = smartInfo?.semester   || detectSemesterFromFilename(fileName);
     const firstEnrollment = getFirstEnrollment(rows);
     const program         = detectProgramFromEnrollment(firstEnrollment);
-    const { intake, academicYear } = detectIntakeYearFromEnrollment(firstEnrollment);
+    const { batch, academicYear } = detectBatchFromEnrollment(firstEnrollment);
 
     const auto = {
       programCode:  program          || '',
       semester:     sheetSemester    || '',
       academicYear: academicYear     || '',
-      intake:       intake           || '',
+      batch:        batch            || '',
       courseName:   sheetCourseName  || '',
       autoDetected: {
         programCode:  !!program,
         semester:     !!sheetSemester,
         academicYear: !!academicYear,
-        intake:       !!intake,
+        batch:        !!batch,
         courseName:   !!sheetCourseName,
       },
     };
@@ -237,7 +237,7 @@ export default function ResultUpload() {
         // Step 3: Resolve metadata
         const firstEnrollment  = getFirstEnrollment(rows);
         const program          = detectProgramFromEnrollment(firstEnrollment);
-        const { intake, academicYear } = detectIntakeYearFromEnrollment(firstEnrollment);
+        const { batch, academicYear } = detectBatchFromEnrollment(firstEnrollment);
 
         // Course name: sheet map takes priority, then filename
         const resolvedCourse = detectSubjectFromSheet(sheetName, file.name) || extractSubjectFromFileName(file.name);
@@ -254,7 +254,7 @@ export default function ResultUpload() {
             programCode:   program,
             semester:      resolvedSem,
             academicYear:  academicYear   || null,
-            intake:        intake         || null,
+            batch:         batch          || null,
             examMonthYear: examMY,
             schemeId:      schemeId       || null,
             uploadedBy:    uploadedBy     || null,
@@ -262,7 +262,7 @@ export default function ResultUpload() {
           const records = await Promise.all(parsed.map(async r => {
             const grade = await calculateGrade({
               programCode: program,
-              batch:       intake,
+              batch:       batch,
               iaMarks:     r.ia_marks,
               eseMarks:    r.ese_marks,
               totalMarks:  r.total_marks,
@@ -306,7 +306,7 @@ export default function ResultUpload() {
         programCode:   val('programCode'),
         semester:      val('semester'),
         academicYear:  val('academicYear') || null,
-        intake:        val('intake')       || null,
+        batch:         val('batch')        || null,
         examMonthYear: examMonthYear.trim(),
         schemeId:      schemeId            || null,
         uploadedBy:    uploadedBy          || null,
@@ -317,7 +317,7 @@ export default function ResultUpload() {
         const r = parsed[i];
         const grade = await calculateGrade({
           programCode: val('programCode'),
-          batch:       val('intake'),
+          batch:       val('batch'),
           iaMarks:     r.ia_marks,
           eseMarks:    r.ese_marks,
           totalMarks:  r.total_marks,
@@ -350,7 +350,7 @@ export default function ResultUpload() {
       <div style={{ marginBottom: 24 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#111827' }}>Upload Results</h2>
         <div style={{ fontSize: 13, color: '#6B7280', marginTop: 3 }}>
-          Program, semester, intake and year are detected automatically from the file
+          Program, semester, batch and year are detected automatically from the file
         </div>
       </div>
 
@@ -554,7 +554,7 @@ export default function ResultUpload() {
                 { key: 'programCode',  label: 'Program',       type: 'select', options: ['MBA','MCA','BBA','BCA'] },
                 { key: 'semester',     label: 'Semester',      type: 'select', options: ['1','2','3','4','5','6'] },
                 { key: 'academicYear', label: 'Academic Year', type: 'text',   placeholder: 'e.g. 2025' },
-                { key: 'intake',       label: 'Batch',         type: 'text',   placeholder: 'e.g. JAN-25' },
+                { key: 'batch',        label: 'Batch',         type: 'text',   placeholder: 'e.g. Jan-2025' },
                 { key: 'courseName',   label: 'Subject Name',  type: 'text',   placeholder: 'e.g. Managerial Economics' },
               ].map(field => (
                 <div key={field.key} style={S.fGroup}>
