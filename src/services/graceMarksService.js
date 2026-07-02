@@ -40,6 +40,15 @@ export async function fetchActiveGracePolicy(batch) {
   return candidates[0];
 }
 
+/** Update the marks_threshold on an existing policy row (used by the Shortfall Report's "Apply" action). */
+export async function updateActiveGracePolicyThreshold(policyId, marksThreshold) {
+  const { error } = await supabase
+    .from('grace_marks_policy')
+    .update({ marks_threshold: marksThreshold })
+    .eq('id', policyId);
+  if (error) throw error;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CYCLE ROW FETCH — batched to bypass Supabase's default 1000-row query cap
 // (see fetchPendingCycles / other services for the same pattern)
@@ -327,4 +336,81 @@ export async function publishFinalResults({ programCode, semester, examMonthYear
   }
 
   return { published: updates.length, graceApplied: approvedSet.size };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTFALL REPORT — decision-support view for the committee, BEFORE any
+// threshold is chosen: how many students are short by 1, 2, 3, ... marks,
+// per batch, so the threshold can be picked with the real distribution in
+// view instead of guessing. Purely a count of raw shortfall — does NOT
+// apply the per-student subject cap (that only matters once a threshold is
+// actually chosen and computeGraceReview/publishFinalResults run for real).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_NUMBERED_SLAB = 9; // slabs 1..9 are exact; anything larger groups into '10+'
+
+export async function computeShortfallReport({ programCode, semester, examMonthYear }) {
+  if (!programCode || !semester || !examMonthYear) {
+    throw new Error('programCode, semester and examMonthYear are required.');
+  }
+
+  const rows = await fetchCycleRows({ programCode, semester, examMonthYear });
+  const failingRows = rows.filter(r => r.result === 'F');
+
+  const programType = getProgramType(programCode);
+  const schemeCache = {};
+  async function schemeFor(batch) {
+    const key = batch || '__null__';
+    if (!(key in schemeCache)) schemeCache[key] = await getApplicableScheme(programType, batch);
+    return schemeCache[key];
+  }
+
+  const slabs = [...Array(MAX_NUMBERED_SLAB)].map((_, i) => String(i + 1)).concat(['10+']);
+  const matrix       = {}; // { batch: { '1': n, ..., '9': n, '10+': n } }
+  const absentCounts = {}; // { batch: n } — AB in ESE, no marks to grace
+  const iaMinCounts  = {}; // { batch: n } — failed via IA-below-50% override, marks-gap irrelevant
+  const otherCounts  = {}; // { batch: n } — no scheme / no total marks on record
+  const batchesSeen  = new Set();
+
+  for (const row of failingRows) {
+    const batch = row.batch || 'Unknown';
+    batchesSeen.add(batch);
+
+    if (row.ese_marks === 'AB') {
+      absentCounts[batch] = (absentCounts[batch] || 0) + 1;
+      continue;
+    }
+    if (row.total_marks === null || row.total_marks === undefined) {
+      otherCounts[batch] = (otherCounts[batch] || 0) + 1;
+      continue;
+    }
+    const scheme = await schemeFor(row.batch);
+    if (!scheme || !scheme.bands || scheme.bands.length === 0) {
+      otherCounts[batch] = (otherCounts[batch] || 0) + 1;
+      continue;
+    }
+    if (isFailedDueToIaMinimum(scheme, row)) {
+      iaMinCounts[batch] = (iaMinCounts[batch] || 0) + 1;
+      continue;
+    }
+    const passCutoff = passCutoffFor(scheme);
+    if (passCutoff === null) {
+      otherCounts[batch] = (otherCounts[batch] || 0) + 1;
+      continue;
+    }
+    const gap = passCutoff - parseFloat(row.total_marks);
+    if (gap <= 0) continue; // shouldn't happen on an F row, but guard anyway
+    const slabKey = gap > MAX_NUMBERED_SLAB ? '10+' : String(gap);
+    if (!matrix[batch]) matrix[batch] = {};
+    matrix[batch][slabKey] = (matrix[batch][slabKey] || 0) + 1;
+  }
+
+  const batches = [...batchesSeen].sort();
+  const policy = batches.length > 0 ? await fetchActiveGracePolicy(batches[0]) : null;
+
+  return {
+    batches, slabs, matrix, absentCounts, iaMinCounts, otherCounts,
+    totalFailing: failingRows.length,
+    policy,
+  };
 }
