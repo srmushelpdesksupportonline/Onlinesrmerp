@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   fetchPendingCycles, computeGraceReview, publishFinalResults,
-  computeShortfallReport, updateActiveGracePolicyThreshold,
+  computeShortfallReport, applyCycleThreshold,
 } from '../../services/graceMarksService';
 
 const S = {
@@ -138,12 +138,18 @@ export default function PublishResults() {
   }
 
   async function handleApplyThreshold() {
-    if (!report?.policy) { setError('No active grace-marks policy found to update.'); return; }
+    if (!selectedCycle) return;
     setApplyingThreshold(true); setError(''); setApplySuccess('');
     try {
-      await updateActiveGracePolicyThreshold(report.policy.id, threshold);
-      setApplySuccess(`✓ Grace marks threshold set to ${threshold} mark(s) short of pass. This takes effect immediately for Review & Publish on every cycle using this policy.`);
-      setReport(r => ({ ...r, policy: { ...r.policy, marks_threshold: threshold } }));
+      const updated = await applyCycleThreshold({
+        programCode:   selectedCycle.program_code,
+        semester:      selectedCycle.semester,
+        examMonthYear: selectedCycle.exam_month_year,
+        marksThreshold: threshold,
+        basePolicy:    report?.policy || null,
+      });
+      setApplySuccess(`✓ Grace marks threshold set to ${threshold} mark(s) short of pass — for THIS cycle only (${selectedCycle.program_code} · Sem ${selectedCycle.semester} · ${selectedCycle.exam_month_year}). Other cycles are unaffected. Takes effect immediately for Review & Publish.`);
+      setReport(r => ({ ...r, policy: updated, policyIsCycleSpecific: true }));
     } catch (e) {
       setError(e.message || 'Failed to update the policy.');
     } finally {
@@ -317,9 +323,16 @@ export default function PublishResults() {
                           At <strong>{threshold} mark(s)</strong>: <strong style={{ color: '#F59E0B' }}>{totalEligibleAtThreshold}</strong> student-subject record(s)
                           {' '}across {batchesAffectedAtThreshold} batch(es) would become grace-eligible (before the per-student subject cap).
                         </div>
-                        {report.policy && (
+                        {report.policy ? (
                           <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
-                            Current active policy: {report.policy.marks_threshold} mark(s) threshold, max {report.policy.max_subjects_per_student} subject(s) per student ({report.policy.cap_scope.toLowerCase()} cap).
+                            {report.policyIsCycleSpecific
+                              ? <>This cycle has its own policy: </>
+                              : <>Using the general default policy (applies to every cycle without an override): </>}
+                            {report.policy.marks_threshold} mark(s) threshold, max {report.policy.max_subjects_per_student} subject(s) per student ({report.policy.cap_scope.toLowerCase()} cap).
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
+                            No policy exists yet for this batch — applying a threshold below will create one for this cycle only.
                           </div>
                         )}
                       </div>
@@ -330,8 +343,8 @@ export default function PublishResults() {
                     <div style={{ display: 'flex', gap: 10 }}>
                       <button
                         onClick={handleApplyThreshold}
-                        disabled={applyingThreshold || !report.policy}
-                        style={{ ...S.primaryBtn, opacity: (applyingThreshold || !report.policy) ? 0.5 : 1, cursor: (applyingThreshold || !report.policy) ? 'not-allowed' : 'pointer' }}
+                        disabled={applyingThreshold}
+                        style={{ ...S.primaryBtn, opacity: applyingThreshold ? 0.5 : 1, cursor: applyingThreshold ? 'not-allowed' : 'pointer' }}
                       >
                         {applyingThreshold ? 'Applying…' : `Apply ${threshold}-Mark Threshold as Policy`}
                       </button>

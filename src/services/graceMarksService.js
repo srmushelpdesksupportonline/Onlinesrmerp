@@ -40,12 +40,102 @@ export async function fetchActiveGracePolicy(batch) {
   return candidates[0];
 }
 
-/** Update the marks_threshold on an existing policy row (used by the Shortfall Report's "Apply" action). */
-export async function updateActiveGracePolicyThreshold(policyId, marksThreshold) {
-  const { error } = await supabase
+/**
+ * Find a policy that targets this EXACT exam cycle (program_code + semester +
+ * exam_month_year all matching), ignoring batch entirely. Returns null if none.
+ */
+export async function resolveCycleSpecificPolicy({ programCode, semester, examMonthYear }) {
+  const { data, error } = await supabase
     .from('grace_marks_policy')
-    .update({ marks_threshold: marksThreshold })
-    .eq('id', policyId);
+    .select('*')
+    .eq('is_active', true)
+    .eq('program_code', programCode)
+    .eq('semester', parseInt(semester))
+    .eq('exam_month_year', examMonthYear)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+/**
+ * Resolve the policy that actually applies to a row: a cycle-specific policy
+ * wins if one exists for this exact cycle (applies to every batch in it
+ * uniformly); otherwise falls back to the general batch-versioned policy
+ * (see fetchActiveGracePolicy) for that row's own batch.
+ */
+export async function resolvePolicyForCycle({ programCode, semester, examMonthYear, batch }) {
+  const cyclePolicy = await resolveCycleSpecificPolicy({ programCode, semester, examMonthYear });
+  if (cyclePolicy) return cyclePolicy;
+  return fetchActiveGracePolicy(batch);
+}
+
+/**
+ * Create or update the grace-marks threshold for one specific exam cycle,
+ * without touching the general/default policy used by every other cycle.
+ * Used by the Shortfall Report's "Apply" action. Inherits max_subjects /
+ * cap_scope from `basePolicy` (the currently-resolved policy) when creating
+ * a brand new cycle-specific row.
+ */
+export async function applyCycleThreshold({ programCode, semester, examMonthYear, marksThreshold, basePolicy }) {
+  const existing = await resolveCycleSpecificPolicy({ programCode, semester, examMonthYear });
+  if (existing) {
+    const { error } = await supabase
+      .from('grace_marks_policy')
+      .update({ marks_threshold: marksThreshold })
+      .eq('id', existing.id);
+    if (error) throw error;
+    return { ...existing, marks_threshold: marksThreshold };
+  }
+
+  const record = {
+    marks_threshold: marksThreshold,
+    max_subjects_per_student: basePolicy?.max_subjects_per_student ?? 2,
+    cap_scope: basePolicy?.cap_scope ?? 'CYCLE',
+    program_code: programCode,
+    semester: parseInt(semester),
+    exam_month_year: examMonthYear,
+    effective_from_batch: null,
+    is_active: true,
+    notes: `Created from Shortfall Report for ${programCode} Sem ${semester} ${examMonthYear}`,
+  };
+  const { data, error } = await supabase.from('grace_marks_policy').insert(record).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GRACE MARKS POLICY — full CRUD for the settings page (no coding required
+// to change thresholds, caps, or scope going forward)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function createGracePolicy({
+  scopeType, programCode, semester, examMonthYear, effectiveFromBatch,
+  marksThreshold, maxSubjectsPerStudent, capScope, notes,
+}) {
+  const record = {
+    marks_threshold: marksThreshold,
+    max_subjects_per_student: maxSubjectsPerStudent,
+    cap_scope: capScope,
+    is_active: true,
+    notes: notes || null,
+    program_code:         scopeType === 'cycle' ? programCode : null,
+    semester:              scopeType === 'cycle' ? parseInt(semester) : null,
+    exam_month_year:       scopeType === 'cycle' ? examMonthYear : null,
+    effective_from_batch:  scopeType === 'general' ? (effectiveFromBatch || null) : null,
+  };
+  const { data, error } = await supabase.from('grace_marks_policy').insert(record).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateGracePolicy(id, updates) {
+  const { error } = await supabase.from('grace_marks_policy').update(updates).eq('id', id);
+  if (error) throw error;
+}
+
+export async function setGracePolicyActive(id, isActive) {
+  const { error } = await supabase.from('grace_marks_policy').update({ is_active: isActive }).eq('id', id);
   if (error) throw error;
 }
 
@@ -156,8 +246,14 @@ export async function computeGraceReview({ programCode, semester, examMonthYear 
     if (!(key in schemeCache)) schemeCache[key] = await getApplicableScheme(programType, batch);
     return schemeCache[key];
   }
+
+  // A cycle-specific policy (if one exists) applies uniformly to every row in
+  // this cycle regardless of batch; otherwise each row falls back to the
+  // general batch-versioned policy for its own batch.
+  const cyclePolicy = await resolveCycleSpecificPolicy({ programCode, semester, examMonthYear });
   const policyCache = {};
   async function policyFor(batch) {
+    if (cyclePolicy) return cyclePolicy;
     const key = batch || '__null__';
     if (!(key in policyCache)) policyCache[key] = await fetchActiveGracePolicy(batch);
     return policyCache[key];
@@ -406,10 +502,12 @@ export async function computeShortfallReport({ programCode, semester, examMonthY
   }
 
   const batches = [...batchesSeen].sort();
-  const policy = batches.length > 0 ? await fetchActiveGracePolicy(batches[0]) : null;
+  const cyclePolicy = await resolveCycleSpecificPolicy({ programCode, semester, examMonthYear });
+  const policy = cyclePolicy || (batches.length > 0 ? await fetchActiveGracePolicy(batches[0]) : null);
 
   return {
     batches, slabs, matrix, absentCounts, iaMinCounts, otherCounts,
+    policyIsCycleSpecific: !!cyclePolicy,
     totalFailing: failingRows.length,
     policy,
   };
