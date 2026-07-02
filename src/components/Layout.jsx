@@ -95,6 +95,7 @@ const NAV = [
       { to: "/results/by-student", label: "By Student"     },
       { to: "/results/by-subject", label: "By Subject"     },
       { to: "/results/grades",     label: "Grades"         },
+      { to: "/results/publish",    label: "Publish Results" },
     ],
   },
   {

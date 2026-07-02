@@ -4,7 +4,8 @@ import { themeQuartz } from 'ag-grid-community';
 import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
 import {
   fetchStudentResultSummaries, fetchResultsByStudent,
-  fetchResultFilterOptions, PROGRAM_CODES, RESULT_COLORS,
+  fetchResultFilterOptions, fetchStudentStatusMap, STUDENT_STATUS_OPTIONS,
+  PROGRAM_CODES, RESULT_COLORS,
 } from '../../services/resultsService';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -94,7 +95,7 @@ function StudentDetailPanel({ student, onClose }) {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, border: '1px solid #E5E7EB', borderRadius: 8, overflow: 'hidden' }}>
                 <thead>
                   <tr style={{ background: '#F9FAFB' }}>
-                    {['Subject', 'Exam Month/Year', 'IA', 'ESE', 'Total', 'Result', 'Grade', 'Backlog'].map(h => (
+                    {['Subject', 'Exam Month/Year', 'IA', 'ESE', 'Total', 'Result', 'Grade', 'Backlog', 'Stage'].map(h => (
                       <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: '#6B7280', fontWeight: 600, borderBottom: '1px solid #E5E7EB' }}>{h}</th>
                     ))}
                   </tr>
@@ -120,6 +121,14 @@ function StudentDetailPanel({ student, onClose }) {
                         {r.is_backlog
                           ? <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>Backlog</span>
                           : <span style={{ color: '#9CA3AF', fontSize: 12 }}>—</span>
+                        }
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        {r.result_stage === 'FINAL'
+                          ? <span style={{ background: '#DCFCE7', color: '#166534', padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>
+                              Final{r.grace_marks_awarded > 0 ? ` (+${r.grace_marks_awarded})` : ''}
+                            </span>
+                          : <span style={{ background: '#F3F4F6', color: '#6B7280', padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>Interim</span>
                         }
                       </td>
                     </tr>
@@ -150,6 +159,7 @@ export default function ResultByStudent() {
   const [filterYear,    setFilterYear]    = useState('');
   const [filterBatch,  setFilterBatch]  = useState('');
   const [filterSem,     setFilterSem]     = useState('');
+  const [filterStatus,  setFilterStatus]  = useState('');
   const [showBacklogsOnly, setShowBacklogsOnly] = useState(false);
 
   const load = useCallback(async () => {
@@ -170,7 +180,8 @@ export default function ResultByStudent() {
         if (filterYear   && student.academic_year !== filterYear) return false;
         return true;
       });
-      setSummaries(filtered_);
+      const statusMap = await fetchStudentStatusMap(filtered_.map(st => st.enrollment_no));
+      setSummaries(filtered_.map(st => ({ ...st, student_status: statusMap[st.enrollment_no] || null })));
       setFilterOptions(opts);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -180,6 +191,7 @@ export default function ResultByStudent() {
 
   const filtered = summaries.filter(s => {
     if (showBacklogsOnly && s.backlog_count === 0) return false;
+    if (filterStatus && s.student_status !== filterStatus) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return s.enrollment_no?.toLowerCase().includes(q)
@@ -234,6 +246,10 @@ export default function ResultByStudent() {
           <option value="">All Batches</option>
           {filterOptions.batches.map(i => <option key={i} value={i}>{i}</option>)}
         </select>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...S.input, width: 130, margin: 0 }}>
+          <option value="">All Statuses</option>
+          {STUDENT_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
         <button
           onClick={() => setShowBacklogsOnly(b => !b)}
           style={{
@@ -247,12 +263,12 @@ export default function ResultByStudent() {
           {showBacklogsOnly ? '⚠ Backlogs Only' : 'All Students'}
         </button>
         {(() => {
-          const hasFilters = !!(filterProgram || filterSem || filterYear || filterBatch || search || showBacklogsOnly);
+          const hasFilters = !!(filterProgram || filterSem || filterYear || filterBatch || filterStatus || search || showBacklogsOnly);
           return (
             <button
               onClick={() => {
                 setFilterProgram(''); setFilterSem(''); setFilterYear('');
-                setFilterBatch(''); setSearch(''); setShowBacklogsOnly(false);
+                setFilterBatch(''); setFilterStatus(''); setSearch(''); setShowBacklogsOnly(false);
               }}
               disabled={!hasFilters}
               style={{
@@ -302,6 +318,7 @@ export default function ResultByStudent() {
                   ? <span style={{ background: '#EEF2FF', color: '#6366F1', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{p.value}</span>
                   : '—' },
               { headerName: 'Year',     field: 'academic_year', minWidth: 90, flex: 0.9, valueFormatter: p => p.value || '—' },
+              { headerName: 'Status',   field: 'student_status', minWidth: 100, flex: 0.9, valueFormatter: p => p.value || '—' },
               { headerName: 'Batch',    field: 'batch',         minWidth: 100, flex: 0.9,
                 cellRenderer: p => p.value
                   ? <span style={{ background: '#F0FDF4', color: '#166534', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>{p.value}</span>

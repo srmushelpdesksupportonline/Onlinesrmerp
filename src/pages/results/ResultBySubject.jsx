@@ -4,7 +4,8 @@ import { themeQuartz } from 'ag-grid-community';
 import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
 import {
   fetchResultsBySubject, fetchSubjectNames, fetchBacklogSummary,
-  fetchResultFilterOptions, PROGRAM_CODES, RESULT_COLORS,
+  fetchResultFilterOptions, fetchStudentStatusMap, STUDENT_STATUS_OPTIONS,
+  PROGRAM_CODES, RESULT_COLORS,
 } from '../../services/resultsService';
 import { formatINR } from '../../services/financeManagementService';
 
@@ -171,6 +172,7 @@ export default function ResultBySubject() {
   const [filterBatch,   setFilterBatch]   = useState('');
   const [filterExamDate, setFilterExamDate] = useState('');
   const [filterResult,   setFilterResult]   = useState('');
+  const [filterStatus,   setFilterStatus]   = useState('');
   const [search,         setSearch]         = useState('');
 
   // Load filter options once
@@ -208,7 +210,8 @@ export default function ResultBySubject() {
           batch:         filterBatch   || undefined,
         }),
       ]);
-      setResults(res);
+      const statusMap = await fetchStudentStatusMap(res.map(r => r.enrollment_no));
+      setResults(res.map(r => ({ ...r, student_status: statusMap[r.enrollment_no] || null })));
       setBacklogStudents(bl);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -217,6 +220,7 @@ export default function ResultBySubject() {
   useEffect(() => { load(); }, [load]);
 
   const filtered = results.filter(r => {
+    if (filterStatus && r.student_status !== filterStatus) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return r.enrollment_no?.toLowerCase().includes(q) || r.student_name?.toLowerCase().includes(q);
@@ -301,18 +305,26 @@ export default function ResultBySubject() {
             <option value="F">Fail</option>
           </select>
         </div>
+        <div>
+          <label style={S.label}>Status</label>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+            style={{ ...S.input, width: 130, margin: 0 }}>
+            <option value="">All</option>
+            {STUDENT_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
         <div style={{ alignSelf: 'flex-end' }}>
           <input placeholder="Search student…" value={search} onChange={e => setSearch(e.target.value)}
             style={{ ...S.input, width: 200, margin: 0 }} />
         </div>
         {(() => {
-          const hasFilters = !!(filterProgram || filterSem || filterSubject || filterYear || filterBatch || filterExamDate || filterResult || search);
+          const hasFilters = !!(filterProgram || filterSem || filterSubject || filterYear || filterBatch || filterExamDate || filterResult || filterStatus || search);
           return (
             <div style={{ alignSelf: 'flex-end' }}>
               <button
                 onClick={() => {
                   setFilterProgram(''); setFilterSem(''); setFilterSubject('');
-                  setFilterYear(''); setFilterBatch(''); setFilterExamDate(''); setFilterResult(''); setSearch('');
+                  setFilterYear(''); setFilterBatch(''); setFilterExamDate(''); setFilterResult(''); setFilterStatus(''); setSearch('');
                 }}
                 disabled={!hasFilters}
                 style={{
@@ -417,6 +429,25 @@ export default function ResultBySubject() {
                 cellRenderer: p => p.value
                   ? <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>Backlog</span>
                   : <span style={{ color: '#9CA3AF' }}>—</span> },
+              { headerName: 'Status',   field: 'student_status', minWidth: 100, flex: 0.9,
+                valueFormatter: p => p.value || '—' },
+              { headerName: 'Stage',    field: 'result_stage',  minWidth: 90,  flex: 0.8,
+                cellRenderer: p => {
+                  const isFinal = p.value === 'FINAL';
+                  return <span style={{ background: isFinal ? '#DCFCE7' : '#F3F4F6', color: isFinal ? '#166534' : '#6B7280', padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>{isFinal ? 'Final' : 'Interim'}</span>;
+                } },
+              { headerName: 'Grace Marks', field: 'grace_marks_awarded', minWidth: 100, flex: 0.9,
+                cellRenderer: p => p.value > 0
+                  ? <span style={{ background: '#FEF9C3', color: '#854D0E', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>+{p.value}</span>
+                  : <span style={{ color: '#9CA3AF' }}>—</span> },
+              { headerName: 'Final Result', field: 'final_result', minWidth: 100, flex: 0.9,
+                cellRenderer: p => {
+                  const colors = { P: { bg: '#DCFCE7', text: '#166534' }, F: { bg: '#FEF2F2', text: '#DC2626' } };
+                  const c = colors[p.value] || { bg: '#F3F4F6', text: '#6B7280' };
+                  return p.value
+                    ? <span style={{ background: c.bg, color: c.text, padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>{p.value}</span>
+                    : <span style={{ color: '#9CA3AF' }}>—</span>;
+                }},
             ]}
           />
         </div>
